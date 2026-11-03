@@ -12,8 +12,8 @@ Aplicación local para gestionar ventas, productos, caja y sucursales. Usa Node.
 Cloná el repositorio y entrá a la carpeta:
 
 ```powershell
-git clone https://github.com/USUARIO/REPOSITORIO.git
-Set-Location REPOSITORIO
+git clone https://github.com/Angel-Codes-842/panaderia.git
+Set-Location panaderia
 ```
 
 Prepará la configuración local:
