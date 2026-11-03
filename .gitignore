@@ -1,0 +1,30 @@
+# Entorno
+.env
+.env.*
+!.env.example
+
+# Datos persistentes locales
+data/
+backups/
+*.dump
+*.dump.tmp
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+npm-debug.log*
+
+# Node
+node_modules/
+
+# Sistema
+.DS_Store
+Thumbs.db
+.vscode/
+/AGENTS.md
+
+# Archivos sensibles
+jar.txt
+codigos-de-licencia.txt

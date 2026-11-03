@@ -1,0 +1,85 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: panaderia-db
+    restart: unless-stopped
+    cpus: ${DB_CPUS:-1.0}
+    mem_limit: ${DB_MEMORY_LIMIT:-768m}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-panaderia}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Definí POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: ${POSTGRES_DB:-panaderia}
+    command:
+      - postgres
+      - -c
+      - max_connections=30
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - effective_cache_size=512MB
+    volumes:
+      - panaderia_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-panaderia} -d ${POSTGRES_DB:-panaderia}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    stop_grace_period: 1m
+    networks:
+      - panaderia_net
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: panaderia:local-prod
+    container_name: panaderia-app
+    restart: unless-stopped
+    cpus: ${APP_CPUS:-1.0}
+    mem_limit: ${APP_MEMORY_LIMIT:-512m}
+    depends_on:
+      db:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-panaderia}:${POSTGRES_PASSWORD:?Definí POSTGRES_PASSWORD en .env}@db:5432/${POSTGRES_DB:-panaderia}
+      NODE_ENV: production
+      NODE_OPTIONS: --max-old-space-size=384
+      TZ: America/Asuncion
+      PORT: 3000
+      DATA_DIR: /app/data
+      DB_POOL_MAX: ${DB_POOL_MAX:-5}
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      HTTPS: ${HTTPS:-0}
+      SEED_IF_EMPTY: '0'
+      LICENCIA_CACHE_MS: ${LICENCIA_CACHE_MS:-30000}
+      INITIAL_ADMIN_USER: ${INITIAL_ADMIN_USER:-admin}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:?Definí INITIAL_ADMIN_PASSWORD en .env}
+    ports:
+      - "${APP_BIND_IP:-0.0.0.0}:${APP_PORT:-3000}:3000"
+    volumes:
+      - panaderia_app_data:/app/data
+      - "${BACKUP_PATH:-./backups}:/app/data/backups"
+    networks:
+      - panaderia_net
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 15s
+
+volumes:
+  panaderia_pg_data:
+  panaderia_app_data:
+
+networks:
+  panaderia_net:
+    driver: bridge

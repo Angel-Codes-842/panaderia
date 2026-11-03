@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Panadería · Sistema de Gestión</title>
+  <meta name="description" content="Sistema de gestión para panadería: ventas, stock, producción, clientes, caja y reportes.">
+  <meta name="theme-color" content="#2c1a0d">
+  <link rel="manifest" href="manifest.json">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Panadería">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='15' fill='%23f3e7cd'/%3E%3Cpath d='M7.5 16.5c0-4 2.7-6.5 8.5-6.5s8.5 2.5 8.5 6.5c0 2.4-1.4 4.3-3.4 5.2l-1.6 1.6c-.7.6-2 1.2-3.5 1.2s-2.8-.6-3.5-1.2l-1.6-1.6c-2-.9-3.4-2.8-3.4-5.2Z' fill='none' stroke='%2355391f' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M11 17.5h2v3.5M14.5 17.5h2v3.5M18 17.5h2v3.5' stroke='%2355391f' stroke-width='1.3' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Login -->
+  <div id="login" class="login-wrap hidden">
+    <form class="login-card" id="login-form" autocomplete="on">
+      <div class="login-logo">
+        <span class="logo-ico"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 25H28Q28 9 16 9Q4 9 4 25Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8.5 19.5Q16 15 23.5 19.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11.5 13l2.4 2.1M20.5 13l-2.4 2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+        <strong>Panadería</strong>
+        <small>Sistema de Gestión</small>
+      </div>
+      <label>Usuario
+        <input id="login-usuario" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+      </label>
+      <label>Contraseña
+        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+      </label>
+      <button class="btn" type="submit" id="btn-login"><i data-lucide="log-in"></i> Entrar</button>
+      <p class="msg" id="login-msg" style="margin:0"></p>
+    </form>
+  </div>
+
+  <!-- Términos y condiciones -->
+  <div id="terminos" class="terminos-wrap hidden">
+    <div class="terminos-card">
+      <div class="terminos-head">
+        <span class="logo-ico"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 25H28Q28 9 16 9Q4 9 4 25Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8.5 19.5Q16 15 23.5 19.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11.5 13l2.4 2.1M20.5 13l-2.4 2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+        <h3>Términos y Condiciones</h3>
+        <p class="muted">Versión 1 · 28/09/2026</p>
+      </div>
+      <div class="terminos-cuerpo">
+        <p class="intro">Al usar este sistema aceptás los siguientes términos. Son parte del acuerdo de uso entre quien desarrolla el sistema y el comercio que lo utiliza.</p>
+        <h4>1. Licencia de uso</h4>
+        <p>Se otorga una licencia de uso limitada, personal y no transferible de este software para la gestión interna del comercio. El comercio no adquiere la propiedad ni el código; está prohibido copiarlo, modificarlo, revenderlo o redistribuirlo sin autorización.</p>
+        <h4>2. Responsabilidad del comercio</h4>
+        <p>El comercio es el único responsable de la veracidad y exactitud de los datos cargados (ventas, caja, gastos, stock y clientes) y del cumplimiento de sus obligaciones tributarias y fiscales ante la DNIT/SET: emisión correcta de comprobantes, uso del RUC y timbrado, y presentación de sus declaraciones. El sistema es una herramienta de apoyo y no reemplaza el control contable ni legal del negocio.</p>
+        <h4>3. Datos personales</h4>
+        <p>El sistema guarda datos de clientes (nombre, documento CI/RUC y teléfono) únicamente para emitir comprobantes y llevar el registro del negocio. El comercio se obliga a usarlos conforme a la Ley N° 6534/2020 de Protección de Datos Personales y a no registrar datos sensibles (salud, origen, biometría, entre otros).</p>
+        <h4>4. Almacenamiento y copias de seguridad</h4>
+        <p>Los datos se guardan en PostgreSQL dentro de Docker. El sistema genera copias diarias en la carpeta <code>backups</code> del equipo, pero es importante copiar esos respaldos a otro dispositivo: una falla o pérdida de la notebook puede afectar tanto los datos como los respaldos locales.</p>
+        <h4>5. Sin garantía y límite de responsabilidad</h4>
+        <p>El software se entrega "tal cual", sin garantías de funcionamiento libre de errores. El desarrollador no responde por daños directos, indirectos o consecuentes derivados del uso o la imposibilidad de uso del sistema, ni por la pérdida de datos. En ningún caso la responsabilidad superará el valor efectivamente pagado por la licencia.</p>
+        <h4>6. Versión de prueba</h4>
+        <p>Durante el modo de prueba el sistema opera con datos de demostración ficticios, los comprobantes llevan marca de agua y no tienen efecto fiscal, y algunas funciones (como la exportación) quedan limitadas hasta la activación de la versión completa.</p>
+        <h4>7. Cambios en estos términos</h4>
+        <p>Estos términos pueden actualizarse. Cuando haya una versión nueva, el sistema pedirá aceptarla antes de continuar usándose. El uso continuado del sistema implica la aceptación de la versión vigente.</p>
+        <h4>8. Ley aplicable</h4>
+        <p>Estos términos se rigen por las leyes de la República del Paraguay. Cualquier controversia se somete a los tribunales de la ciudad de Asunción.</p>
+      </div>
+      <div class="terminos-pie">
+        <button class="btn" id="btn-aceptar-terminos"><i data-lucide="check-circle"></i></button>
+        <p class="muted">La aceptación queda registrada. Podés volver a leerlos en Configuración.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="logo">
+        <span class="logo-ico"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M4 25H28Q28 9 16 9Q4 9 4 25Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8.5 19.5Q16 15 23.5 19.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11.5 13l2.4 2.1M20.5 13l-2.4 2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+        <div>
+          <strong>Panadería</strong>
+          <small>Sistema de Gestión</small>
+        </div>
+      </div>
+      <nav>
+        <span class="nav-section">Principal</span>
+        <button class="nav-item" data-tab="dashboard"><span data-lucide="layout-dashboard"></span> Panel</button>
+        <button class="nav-item active" data-tab="ventas"><span data-lucide="shopping-cart"></span> Punto de venta</button>
+        <button class="nav-item" data-tab="historial-ventas"><span data-lucide="clipboard-list"></span> Control de ventas</button>
+
+        <span class="nav-section">Operaciones</span>
+        <button class="nav-item" data-tab="produccion"><span data-lucide="chef-hat"></span> Producción</button>
+        <button class="nav-item" data-tab="caja"><span data-lucide="wallet"></span> Caja</button>
+        <button class="nav-item" data-tab="gastos"><span data-lucide="receipt"></span> Gastos</button>
+
+        <span class="nav-section">Administración</span>
+        <button class="nav-item" data-tab="productos"><span data-lucide="cake"></span> Productos</button>
+        <button class="nav-item" data-tab="clientes"><span data-lucide="users"></span> Clientes</button>
+        <button class="nav-item" data-tab="creditos"><span data-lucide="receipt"></span> Créditos / Fiados</button>
+        <button class="nav-item" data-tab="reportes"><span data-lucide="trending-up"></span> Reportes</button>
+        <button class="nav-item" data-tab="config"><span data-lucide="settings"></span> Configuración</button>
+
+        <span class="nav-section">Soporte</span>
+        <button class="nav-item" data-tab="ayuda"><span data-lucide="life-buoy"></span> Dudas y ayuda</button>
+      </nav>
+      <div class="sidebar-sucursal" id="sucursal-side"></div>
+      <div class="sidebar-foot" id="caja-resumen-lateral"></div>
+      <button class="btn small ghost logout-btn" id="btn-logout" onclick="cerrarSesion()"><i data-lucide="log-out"></i> Cerrar sesión <span id="usuario-actual"></span></button>
+    </aside>
+
+    <main class="content">
+      <div id="banner-prueba" class="banner-prueba hidden"></div>
+      <!-- PANEL -->
+      <section id="tab-dashboard" class="panel">
+        <div class="page-head">
+          <h2>Panel del día</h2>
+          <span class="fecha" id="dash-fecha"></span>
+        </div>
+        <div class="filtro-reporte hidden" id="dash-filtro"></div>
+        <div class="cards" id="dash-cards"></div>
+        <div class="grid2">
+          <div class="box">
+            <h3>Ventas últimos 7 días</h3>
+            <div class="chart" id="dash-chart"></div>
+          </div>
+          <div class="box">
+            <h3>Top productos de la semana</h3>
+            <table id="dash-top"></table>
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>Ventas del día por forma de pago</h3>
+            <table id="dash-formas"></table>
+          </div>
+          <div class="box">
+            <h3><i data-lucide="chef-hat" style="width:15px;height:15px;vertical-align:-2px;color:var(--ambar)"></i> Producción de hoy</h3>
+            <table id="dash-produccion"></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- PUNTO DE VENTA -->
+      <section id="tab-ventas" class="panel active">
+        <div class="page-head">
+          <h2>Punto de Venta</h2>
+          <div class="pos-head-actions">
+            <span class="fecha" id="pos-fecha"></span>
+            <span class="tag ticket" id="pos-sucursal" style="display:none"></span>
+          </div>
+        </div>
+
+        <div class="msg err" id="pos-caja-aviso" style="display:none;margin-top:0;margin-bottom:14px;padding:10px 14px;border-radius:10px;align-items:center;gap:10px">
+          <i data-lucide="lock" style="width:16px;height:16px;flex-shrink:0"></i>
+          <span style="flex:1">No hay una caja abierta. Debe abrir la caja para poder realizar ventas.</span>
+          <button class="btn small" onclick="irATab('caja')"><i data-lucide="wallet"></i> Ir a Caja</button>
+        </div>
+
+        <div class="pos-header-row">
+          <button type="button" class="pos-search-wrap pos-quick-search pos-search-trigger" onclick="abrirBuscarProductoPOS()" aria-haspopup="dialog">
+            <i data-lucide="search"></i>
+            <span>Buscar por nombre, código o categoría...</span>
+          </button>
+          <button class="btn ghost pos-new-sale" onclick="nuevaVentaPOS()"><i data-lucide="plus"></i> Nueva venta</button>
+          <button class="pos-client-btn" onclick="abrirSelectorClientePOS()">
+            <i data-lucide="user"></i>
+            <span id="pos-cliente-nombre-top">Sin cliente</span>
+          </button>
+          <select id="pos-tipo-comprobante" class="pos-select">
+            <option value="ticket">Ticket</option>
+            <option value="factura">Factura</option>
+          </select>
+        </div>
+
+        <div class="pos-main-grid">
+          <div class="pos-left">
+            <div class="pos-panel pos-cart-panel">
+              <div class="pos-panel-head">
+                <h3><span class="pos-step">1</span> Ticket <span class="pos-badge" id="pos-carrito-count">0</span></h3>
+                <button class="btn ghost small" onclick="vaciarCarrito()"><i data-lucide="trash-2"></i> Vaciar carrito</button>
+              </div>
+              <div class="pos-cart-table-wrap">
+                <table class="pos-cart-table">
+                  <thead>
+                    <tr>
+                      <th>Producto</th>
+                      <th class="center">Cantidad</th>
+                      <th class="right">Precio</th>
+                      <th class="right">Subtotal</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody id="pos-cart-body"></tbody>
+                </table>
+                <div id="pos-cart-vacio" class="pos-cart-empty">
+                  <i data-lucide="shopping-cart"></i>
+                  <p>No hay productos agregados</p>
+                  <button type="button" class="btn ghost small" onclick="abrirBuscarProductoPOS()">Buscar productos</button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="pos-right">
+            <div class="pos-panel sticky">
+              <div class="pos-panel-head">
+                <h3><span class="pos-step">2</span> Cobro</h3>
+              </div>
+              <div class="pos-cobro">
+                <div class="pos-totals">
+                  <div class="pos-tot-row">
+                    <span>Subtotal</span>
+                    <span id="pos-subtotal">₲ 0</span>
+                  </div>
+                  <div class="pos-tot-row">
+                    <span>Descuento</span>
+                    <div class="pos-disc-wrap">
+                      <span>₲</span>
+                      <input type="number" id="pos-descuento" value="0" min="0">
+                    </div>
+                  </div>
+                  <div class="pos-tot-row total">
+                    <span>Total a pagar</span>
+                    <span id="pos-total-pagar">₲ 0</span>
+                  </div>
+                </div>
+
+                <div class="pos-field">
+                  <label>Forma de pago</label>
+                  <select id="pos-forma-pago" class="pos-select full">
+                    <option value="efectivo">Efectivo</option>
+                    <option value="tarjeta">Tarjeta</option>
+                    <option value="transferencia">Transferencia</option>
+                    <option value="credito">Crédito / Fiado</option>
+                  </select>
+                </div>
+
+                <div class="pos-field" id="pos-recibido-group">
+                  <label id="pos-recibido-label">Monto recibido</label>
+                  <input type="number" id="pos-recibido" class="pos-input" placeholder="0">
+                </div>
+
+                <div class="pos-vuelto" id="pos-vuelto-wrap" style="display:none">
+                  <span>Vuelto</span>
+                  <strong id="pos-vuelto">₲ 0</strong>
+                </div>
+
+                <div class="pos-vuelto" id="pos-saldo-wrap" style="display:none;background:#fff7ed;color:#b45309">
+                  <span>Saldo a crédito</span>
+                  <strong id="pos-saldo">₲ 0</strong>
+                </div>
+
+                <button class="btn btn-cobrar" id="btn-vender"><i data-lucide="check-circle"></i> Cobrar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <details class="pos-history">
+          <summary>Comprobantes de hoy</summary>
+          <div class="pos-panel">
+            <div class="pos-table-wrap">
+              <table id="tabla-ventas"></table>
+            </div>
+          </div>
+        </details>
+      </section>
+
+      <!-- CONTROL DE VENTAS -->
+      <section id="tab-historial-ventas" class="panel">
+        <div class="page-head">
+          <div>
+            <h2>Control de ventas</h2>
+            <p class="muted">Consultá comprobantes, revisá sus detalles, reimprimí o anulá ventas.</p>
+          </div>
+        </div>
+        <div class="box">
+          <form id="ventas-filtros" class="ventas-filtros">
+            <label>Desde<input type="date" id="ventas-desde" required></label>
+            <label>Hasta<input type="date" id="ventas-hasta" required></label>
+            <label>Comprobante
+              <select id="ventas-tipo">
+                <option value="">Todos</option>
+                <option value="ticket">Ticket</option>
+                <option value="factura">Factura</option>
+              </select>
+            </label>
+            <label>Estado
+              <select id="ventas-estado">
+                <option value="">Todos</option>
+                <option value="vigentes">Vigentes</option>
+                <option value="anuladas">Anuladas</option>
+              </select>
+            </label>
+            <label>Forma de pago
+              <select id="ventas-forma-pago">
+                <option value="">Todas</option>
+                <option value="efectivo">Efectivo</option>
+                <option value="transferencia">Transferencia</option>
+                <option value="tarjeta">Tarjeta</option>
+                <option value="credito">Crédito / Fiado</option>
+              </select>
+            </label>
+            <label class="ventas-busqueda">Buscar
+              <input type="search" id="ventas-buscar" placeholder="N.º, cliente o documento">
+            </label>
+            <button type="submit" class="btn"><i data-lucide="search"></i> Buscar</button>
+          </form>
+          <div class="cards ventas-resumen">
+            <div class="card"><div class="valor" id="ventas-cantidad">0</div><div class="etiqueta">Comprobantes encontrados</div></div>
+            <div class="card positivo"><div class="valor" id="ventas-total-vigente">₲ 0</div><div class="etiqueta">Importe de ventas no anuladas</div></div>
+            <div class="card ambar"><div class="valor" id="ventas-cantidad-anulada">0</div><div class="etiqueta">Anuladas</div></div>
+          </div>
+          <p class="muted ventas-aviso-anulacion">Al anular una venta se devuelve el stock y se registra el egreso correspondiente en la caja, si está abierta.</p>
+          <div class="pos-table-wrap ventas-tabla-wrap">
+            <table id="tabla-control-ventas" class="ventas-tabla-control"></table>
+          </div>
+          <div class="ventas-paginacion">
+            <button type="button" class="btn ghost small" id="ventas-anterior">Anterior</button>
+            <span class="muted" id="ventas-pagina"></span>
+            <button type="button" class="btn ghost small" id="ventas-siguiente">Siguiente</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- PRODUCTOS -->
+      <section id="tab-productos" class="panel">
+        <div class="page-head">
+          <h2>Productos</h2>
+          <button class="btn" id="btn-nuevo-producto"><i data-lucide="plus"></i> Nuevo producto</button>
+        </div>
+        <div class="box">
+          <div class="buscar-wrap" style="margin-bottom:16px">
+            <i data-lucide="search" class="buscar-ico"></i>
+            <input type="text" id="productos-buscar" placeholder="Buscar producto..." class="buscar">
+          </div>
+          <table id="tabla-productos"></table>
+        </div>
+      </section>
+
+      <!-- CLIENTES -->
+      <section id="tab-clientes" class="panel">
+        <div class="page-head">
+          <h2>Clientes</h2>
+          <button class="btn" id="btn-nuevo-cliente"><i data-lucide="user-plus"></i> Nuevo cliente</button>
+        </div>
+        <div class="box">
+          <p class="muted" style="margin-bottom:14px">Ventas sin nombre o documento quedan como <b>Consumidor Final</b>. Usá la opción <b>Cliente mostrador</b> en el punto de venta.</p>
+          <div class="buscar-wrap" style="margin-bottom:16px">
+            <i data-lucide="search" class="buscar-ico"></i>
+            <input type="text" id="clientes-buscar" placeholder="Buscar cliente..." class="buscar">
+          </div>
+          <table id="tabla-clientes"></table>
+        </div>
+      </section>
+
+      <!-- CRÉDITOS / FIADOS -->
+      <section id="tab-creditos" class="panel">
+        <div class="page-head">
+          <h2>Créditos / Fiados</h2>
+        </div>
+        <div class="box">
+          <p class="muted" style="margin-bottom:14px">Ventas a crédito con saldo pendiente. Tocá <b>Cobrar abono</b> para registrar un pago contra la caja de hoy.</p>
+          <table id="tabla-creditos"></table>
+        </div>
+      </section>
+
+      <!-- PRODUCCION -->
+      <section id="tab-produccion" class="panel">
+        <div class="page-head">
+          <h2>Producción</h2>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>Registrar producción</h3>
+            <p class="muted" style="margin-bottom:12px">Cargá lo que horneaste y el stock del producto se suma solo.</p>
+            <label>Producto
+              <select id="select-prod"></select>
+            </label>
+            <label>Cantidad
+              <input type="number" id="prod-cantidad" value="" min="0.001" step="any">
+            </label>
+            <button class="btn" id="btn-producir"><i data-lucide="chef-hat"></i> Registrar producción</button>
+            <p class="msg" id="prod-msg"></p>
+          </div>
+          <div class="box">
+            <h3>Historial de producción</h3>
+            <table id="tabla-lotes"></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- REPORTES -->
+      <section id="tab-reportes" class="panel">
+        <div class="page-head">
+          <h2>Reportes</h2>
+        </div>
+        <div class="filtro-reporte hidden" id="rep-filtro"></div>
+        <div class="box">
+          <label>Fecha del reporte
+            <input type="date" id="rep-fecha">
+          </label>
+          <div class="cards" id="rep-cards"></div>
+        </div>
+        <div class="grid2">
+          <div class="box">
+            <h3>Ventas del día</h3>
+            <table id="rep-ventas"></table>
+          </div>
+          <div class="box">
+            <h3>Producción del día</h3>
+            <table id="rep-lotes"></table>
+          </div>
+        </div>
+        <div class="box">
+          <h3>Historial de cajas</h3>
+          <table id="rep-cajas"></table>
+        </div>
+      </section>
+
+      <!-- CAJA -->
+      <section id="tab-caja" class="panel">
+        <div class="page-head">
+          <h2>Control de caja</h2>
+          <span class="tag ticket" id="caja-sucursal" style="display:none"></span>
+        </div>
+        <div class="seg" id="caja-seg">
+          <button class="activo" data-seg="dia"><i data-lucide="calendar"></i> Día actual</button>
+          <button data-seg="historial"><i data-lucide="history"></i> Historial de cajas</button>
+        </div>
+        <div id="caja-dia">
+          <div id="caja-pendientes"></div>
+          <div id="caja-abrir" class="box">
+            <h3>Abrir caja del día</h3>
+            <label>Efectivo inicial
+              <input type="number" id="caja-apertura" value="0">
+            </label>
+            <button class="btn" id="btn-abrir-caja"><i data-lucide="lock-open"></i> Abrir caja</button>
+            <p class="msg" id="abrir-msg"></p>
+          </div>
+          <div id="caja-info" class="hidden">
+            <div class="cards" id="caja-cards"></div>
+            <div class="grid2">
+              <div class="box">
+                <h3>Movimientos de caja</h3>
+                <table id="tabla-caja-movs"></table>
+              </div>
+              <div id="caja-controles"></div>
+            </div>
+          </div>
+        </div>
+        <div id="caja-historial" class="hidden">
+          <div class="box">
+            <h3>Historial de cajas</h3>
+            <p class="muted" style="margin-bottom:10px">Todas las cajas cerradas y abiertas, con su detalle. Podés reabrir una caja cerrada para corregir movimientos.</p>
+            <table id="tabla-historial-cajas"></table>
+          </div>
+        </div>
+      </section>
+
+      <!-- GASTOS -->
+      <section id="tab-gastos" class="panel">
+        <div class="page-head">
+          <h2>Gastos</h2>
+          <button class="btn" id="btn-nuevo-gasto"><i data-lucide="plus"></i> Registrar gasto</button>
+        </div>
+        <div class="cards" id="gastos-cards"></div>
+        <div class="box">
+          <div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap">
+            <label style="margin:0;flex:1;min-width:160px">Filtrar por fecha
+              <input type="date" id="gastos-fecha">
+            </label>
+            <button class="btn ghost" id="btn-gastos-hoy" style="margin-bottom:0">Hoy</button>
+            <button class="btn ghost" id="btn-gastos-todos" style="margin-bottom:0">Todos</button>
+          </div>
+          <table id="tabla-gastos"></table>
+        </div>
+      </section>
+
+      <!-- AYUDA -->
+      <section id="tab-ayuda" class="panel">
+        <div class="page-head">
+          <h2>Dudas y ayuda</h2>
+        </div>
+        <div class="ayuda" style="max-width:880px">
+          <div class="box" style="background:var(--ambar-bg)">
+            <p style="margin:0"><b>Guía de uso del sistema.</b> Si el desarrollador no está disponible, casi todas las dudas se resuelven acá: cómo se usa cada módulo, la rutina diaria y las preguntas frecuentes. Tocá cada tema para abrirlo.</p>
+          </div>
+
+          <div class="box" id="caja-terminos">
+            <h3>Legal</h3>
+            <p class="muted">Versión 1 · 28/09/2026. Rige las condiciones de uso del sistema, las responsabilidades del comercio y el tratamiento de los datos.</p>
+            <button class="btn ghost" onclick="mostrarTerminos(true)"><i data-lucide="scroll-text"></i> Leer Términos y Condiciones</button>
+          </div>
+
+          <div class="box">
+            <h3>Arranque del sistema</h3>
+            <details>
+              <summary>¿Cómo abro el sistema?</summary>
+              <div class="cuerpo">
+                <p>En Linux, hacé doble clic en <b>iniciar.sh</b> (o ejecutá <code>./iniciar.sh</code> en una terminal). En Windows, doble clic en <b>iniciar.bat</b>. El sistema corre con Docker y queda disponible en <b>http://localhost:3000</b>.</p>
+                <p>Para entrar desde una tablet o celular en la misma red, usá la dirección que muestra la consola al arrancar (por ejemplo <code>http://192.168.0.50:3000</code>).</p>
+                <p>Si el puerto 3000 ya está ocupado por otra aplicación, hay que iniciar con otro puerto: cerrar la terminal/consola y ejecutar <code>APP_PORT=3010 ./iniciar.sh</code> (Linux) o <code>set APP_PORT=3010</code> antes de <b>iniciar.bat</b> (Windows), y entrar a <b>http://localhost:3010</b>.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Dónde se guardan los datos?</summary>
+              <div class="cuerpo">
+                <p>Todos los datos viven en el archivo <code>data/panaderia.db</code> de la carpeta del proyecto: productos, clientes, ventas, producción, cajas y gastos.</p>
+                <p>Al encender el sistema se crea un <b>backup diario</b> en <code>data/backups/</code> (se guardan los últimos 7 días).</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Funciona sin internet?</summary>
+              <div class="cuerpo">
+                <p>Sí. Toda la información y los iconos están en la computadora. Solo si no hay internet cambia el tipo de letra (se usa una parecida).</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Cómo restauro datos desde un backup?</summary>
+              <div class="cuerpo">
+                <p>Primero copiá <code>data/panaderia.db</code> a otra carpeta. Después reemplazá el archivo <code>data/panaderia.db</code> por el backup que quieras de <code>data/backups/</code> (por ejemplo <code>panaderia-2026-08-13.db</code>) y volvé a iniciar el sistema. Es recomendable pedir ayuda para esto si no estás seguro.</p>
+              </div>
+            </details>
+          </div>
+
+          <div class="box">
+            <h3>Rutina diaria (paso a paso)</h3>
+            <div class="cuerpo pasos">
+              <p><b>1. Abrir la caja.</b> Andá a <b>Caja</b> y cargá el efectivo inicial. Mientras la caja esté abierta, todas las ventas y gastos se registran como movimientos de caja automáticamente.</p>
+              <p><b>2. Vender.</b> Usá el <b>Punto de venta</b>: tocá los productos, cobrá y emití el comprobante.</p>
+              <p><b>3. Registrar gastos.</b> Andá a <b>Gastos</b> y cargá los gastos del día (luz, agua, insumos, etc.). Se descuentan de la caja del día.</p>
+              <p><b>4. Cerrar la caja.</b> Al terminar el día, en <b>Caja</b> contá el dinero real y cargalo en "Cerrar esta caja". El sistema calcula el esperado y la diferencia.</p>
+              <p><b>5. Revisar el Panel.</b> Ventas, gastos, producción y el gráfico de la semana.</p>
+            </div>
+          </div>
+
+          <div class="box">
+            <h3>Punto de venta</h3>
+            <details>
+              <summary>¿Cómo vendo un producto?</summary>
+              <div class="cuerpo">
+                <p>En <b>Punto de venta</b> tocá <b>Buscar por nombre, código o categoría</b>, elegí el producto en la ventana de búsqueda y se agrega al ticket. Revisá las cantidades y el total, elegí comprobante y forma de pago, y tocá <b>Cobrar</b>. Si pagás en efectivo, cargá lo que recibís para calcular el <b>vuelto</b>; al confirmar se imprime el comprobante.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Cómo vendo por kilo?</summary>
+              <div class="cuerpo">
+                <p>Los productos como pan francés, pan integral o chipa se venden <b>por peso</b>. Al tocar el producto se pide el peso en kilogramos (ej: 0,500 = medio kilo). El total se calcula con el precio por kg.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Los productos necesitan código de barras?</summary>
+              <div class="cuerpo">
+                <p>No. En la ventana de búsqueda del punto de venta podés buscar por nombre o categoría. El código es opcional y sirve como atajo si usás un lector de barras; no se genera ningún código automático.</p>
+              </div>
+            </details>
+            <details>
+              <summary>Ticket interno vs Factura</summary>
+              <div class="cuerpo">
+                <p><b>Ticket interno:</b> comprobante de control del mostrador. <b>Factura:</b> requiere cliente identificado, timbrado vigente, rango autorizado y tasas de IVA configurados por el dueño en <b>Configuración</b>. Confirmá con tu contador el régimen de emisión válido para el negocio; la impresión del sistema no reemplaza la autorización de la DNIT.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Me equivoqué en una venta?</summary>
+              <div class="cuerpo">
+                <p>En <b>Control de ventas</b> filtrá por fecha y buscá el comprobante. Desde ahí podés abrir el detalle, reimprimirlo o <b>anularlo</b>: se devuelve el stock y se registra el movimiento de caja correspondiente.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Vendo sin cliente?</summary>
+              <div class="cuerpo">
+                <p>Sí: al cobrar dejá la opción <b>Consumidor Final</b> en el selector de cliente. No hace falta crear un cliente para vender.</p>
+              </div>
+            </details>
+          </div>
+
+          <div class="box">
+            <h3>Producción</h3>
+            <details>
+              <summary>¿Cómo registro una producción?</summary>
+              <div class="cuerpo">
+                <p>En <b>Producción</b> elegí el producto y cargá la <b>cantidad</b> que horneaste (en la unidad del producto, ej: 30 kg de pan o 48 unidades de medialuna). El stock del producto se suma solo y queda registrado en el historial.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Puedo producir cuando quiera?</summary>
+              <div class="cuerpo">
+                <p>Sí. No hace falta materia prima ni receta: registrás la producción real y el sistema solo suma el stock. Las ventas de ese día van acorde al stock disponible.</p>
+              </div>
+            </details>
+          </div>
+
+          <div class="box">
+            <h3>Productos</h3>
+            <details>
+              <summary>¿Cómo creo o edito un producto?</summary>
+              <div class="cuerpo">
+                <p>En <b>Productos</b> tocá <b>Nuevo producto</b> (o el lápiz en la fila) y cargá: nombre, categoría, unidad (unidad, docena o kg), <b>precio de venta</b> y el <b>stock</b> actual. El código de barras es opcional; solo cargalo si usás un lector. Con el botón verde podés ajustar el stock de un producto (ej: sobrantes, faltantes o sobras de un encargo).</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Para qué sirve el stock?</summary>
+              <div class="cuerpo">
+                <p>Al vender, el stock baja solo. Al registrar producción, sube. Si un producto se queda sin stock, en el punto de venta se marca como <b>agotado</b> y no se puede vender.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Por qué no aparece un producto en el punto de venta?</summary>
+              <div class="cuerpo">
+                <p>Puede tener <b>stock 0</b> o estar <b>desactivado</b> (eliminado con el botón de papelera). Revisalo en <b>Productos</b>; si está desactivado, crealo de nuevo.</p>
+              </div>
+            </details>
+          </div>
+
+          <div class="box">
+            <h3>Caja</h3>
+            <details>
+              <summary>¿Qué pasa si vendo sin abrir la caja?</summary>
+              <div class="cuerpo">
+                <p><b>No se puede:</b> el sistema bloquea la venta si no hay una caja abierta para hoy (en el punto de venta aparece el aviso y el botón de cobrar queda deshabilitado). Por eso la rutina empieza abriendo la caja del día en el módulo <b>Caja</b>. Si quedó una caja anterior abierta, el sistema lo avisa al abrir.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Qué es el "cierre esperado"?</summary>
+              <div class="cuerpo">
+                <p>Es la plata que <b>debería haber</b> en caja: apertura + todas las ventas − todos los gastos y egresos del día. Al cerrar, cargás el <b>cierre real</b> (lo que contaste) y la <b>diferencia</b> es real menos esperado. Si no coincide, revisá los movimientos.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Cómo agrego un egreso fuera de las ventas?</summary>
+              <div class="cuerpo">
+                <p>Con la caja abierta, en <b>Caja</b> usá <b>Registrar egreso</b> (ej: retiro de efectivo). También podés registrarlo como <b>Gasto</b>, que se vincula solo.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Me olvidé de cerrar la caja ayer?</summary>
+              <div class="cuerpo">
+                <p>Al abrir la caja de hoy el sistema avisa que hay una <b>caja anterior abierta</b>. Cerrá la anterior (o reabrí su detalle desde <b>Historial de cajas</b>) y después abrí la de hoy. Cada día tiene su propia caja.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Puedo corregir una caja ya cerrada?</summary>
+              <div class="cuerpo">
+                <p>Sí: en <b>Historial de cajas</b>, tocá <b>Reabrir</b> (se borran el cierre y la diferencia). Agregá o corregí movimientos y volvé a cerrarla. Los gastos de esa fecha también se pueden borrar desde <b>Gastos</b>.</p>
+              </div>
+            </details>
+          </div>
+
+          <div class="box">
+            <h3>Gastos</h3>
+            <details>
+              <summary>¿Cómo registro un gasto?</summary>
+              <div class="cuerpo">
+                <p>En <b>Gastos</b> tocá <b>Registrar gasto</b>: concepto, categoría y monto. Si hay una caja abierta para esa fecha, el gasto <b>se registra automáticamente como egreso de caja</b>. Podés filtrar por día o ver todos.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Cómo borro un gasto?</summary>
+              <div class="cuerpo">
+                <p>Con el botón de papelera en la fila. Si el gasto estaba vinculado a la caja, <b>el egreso se revierte solo</b> y la caja se recalcula (aunque ya esté cerrada).</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Los gastos cómo afectan la caja?</summary>
+              <div class="cuerpo">
+                <p>Los gastos se restan del <b>cierre esperado</b> de la caja del día. En el Panel se ven por separado en la tarjeta "Gastos de hoy" y en el módulo <b>Gastos</b>.</p>
+              </div>
+            </details>
+          </div>
+
+          <div class="box">
+            <h3>Clientes, reportes y configuración</h3>
+            <details>
+              <summary>¿Cómo agrego un cliente?</summary>
+              <div class="cuerpo">
+                <p>En <b>Clientes</b> tocá <b>Nuevo cliente</b>: nombre, tipo de documento (RUC o cédula), número y teléfono. También se puede crear rápido desde el cobro: al vender, tocá <b>Nuevo cliente</b> dentro de la ventana de cobro y la venta continúa con el cliente elegido.</p>
+                <p>Si el cliente ya fue cargado alguna vez, <b>al tipear su CI o RUC</b> (en el cobro o en el formulario de clientes) la ficha se <b>autocompleta sola</b> con los datos guardados. Evitá duplicados: si el número ya existe, el sistema te avisa y abre la ficha existente.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Qué muestra Reportes?</summary>
+              <div class="cuerpo">
+                <p>El <b>reporte del día</b>: total vendido por forma de pago, producción, productos más vendidos y caja. El <b>Panel</b> muestra además la semana, el top de productos y el stock de los productos.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Cómo configuro los datos de la factura?</summary>
+              <div class="cuerpo">
+                <p>El dueño carga en <b>Configuración</b> los datos del emisor, el timbrado vigente, establecimiento, punto de expedición, rango autorizado y el IVA de cada producto. Cada sucursal puede tener su propia numeración. Verificá esos datos y el régimen de emisión con tu contador antes de emitir.</p>
+              </div>
+            </details>
+          </div>
+
+          <div class="box">
+            <h3>Acceso y contraseña</h3>
+            <details>
+              <summary>¿Cómo entro al sistema?</summary>
+              <div class="cuerpo">
+                <p>Al abrir <b>http://localhost:3000</b> (o la dirección de la red) aparece la pantalla de <b>entrar</b>. Pedí el usuario y la contraseña a quien te lo instaló.</p>
+                <p>La primera vez se usa <b>admin</b> / <b>admin123</b>. Apenas entrás, cambiala en <b>Configuración → Tu contraseña</b>.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Cómo cambio mi contraseña?</summary>
+              <div class="cuerpo">
+                <p>En <b>Configuración → Tu contraseña</b>: poné la actual, escribí la nueva (mínimo 6 caracteres) y tocá <b>Cambiar contraseña</b>.</p>
+                <p>Importante: los otros equipos (por ejemplo la tablet) quedan <b>desconectados</b> y tendrán que entrar de nuevo con la contraseña nueva.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Me sacó del sistema sin pedirlo?</summary>
+              <div class="cuerpo">
+                <p>La sesión dura <b>12 horas</b> y se renueva cada vez que usás el sistema. Si pasan 12 horas sin usarlo, se cierra sola y tenés que entrar de nuevo. Es una medida de seguridad para que la computadora no quede abierta con los datos de la panadería a la vista.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Olvidé la contraseña?</summary>
+              <div class="cuerpo">
+                <p>Pedile a quien te instaló el sistema que la restablezca, o pedí ayuda. <b>No hay forma de recuperarla</b> desde el sistema: la contraseña no se guarda escrita en ningún lado, solo una huella cifrada. Para que nadie tenga que pasada por el mismo trance, anotá la contraseña en un lugar seguro.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Cómo cierro sesión en la PC del mostrador?</summary>
+              <div class="cuerpo">
+                <p>Abajo de la barra lateral está el botón <b>Cerrar sesión</b>. Usalo siempre al terminar el turno, sobre todo si la computadora es compartida.</p>
+              </div>
+            </details>
+          </div>
+
+          <div class="box">
+            <h3>Licencia</h3>
+            <details>
+              <summary>¿Cómo activo la versión completa?</summary>
+              <div class="cuerpo">
+                <p>Con el código de activación que entrega la persona que te instaló el sistema. Andá a <b>Configuración → Versión y licencia</b> e ingresalo allí.</p>
+              </div>
+            </details>
+          </div>
+
+          <div class="box">
+            <h3>Problemas comunes</h3>
+            <details>
+              <summary>El sistema no abre o el navegador da error</summary>
+              <div class="cuerpo">
+                <p>Verificá que la consola muestre <b>"Sistema Panadería corriendo en http://localhost:3000"</b>. Con Docker se comprueba con <code>docker compose ps</code>: la columna de estado debe decir <b>healthy</b>. Para volver a intentarlo, ejecutá <b>iniciar.sh</b> (o <b>iniciar.bat</b> en Windows) otra vez.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Cómo pruebo con datos de ejemplo?</summary>
+              <div class="cuerpo">
+                <p>El sistema viene con 7 días de datos demo ya cargados. Si querés volver a empezar, andá a <b>Configuración → Datos de demostración</b> y tocá <b>Restablecer datos demo</b>. <b>Ojo: borra todo lo cargado</b> (ventas, productos, clientes, cajas) y deja los datos de prueba con la caja de hoy abierta.</p>
+              </div>
+            </details>
+            <details>
+              <summary>¿Puedo usar el sistema en varias computadoras?</summary>
+              <div class="cuerpo">
+                <p>Sí: el sistema corre en una sola computadora, pero se puede entrar desde la tablet o el celular por la red. Para usarlo en <b>otra computadora</b> hay que instalar Docker ahí y copiar la carpeta <code>data/</code> completa (o solo <code>panaderia.db</code> con sus backups).</p>
+              </div>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <!-- CONFIGURACION -->
+      <section id="tab-config" class="panel">
+        <div class="page-head">
+          <h2>Configuración del negocio</h2>
+        </div>
+        <div class="box" style="max-width:760px" id="box-negocio-config">
+          <h3>Datos del negocio</h3>
+          <p class="muted" style="margin-bottom:16px">Identifican al emisor en los comprobantes impresos. Completá la información tal como figura en tu RUC.</p>
+          <div class="form-row">
+            <div class="full"><label>Nombre del negocio
+              <input id="cfg-nombre" placeholder="Ej: Panadería La Abuela"></label></div>
+          </div>
+          <div class="form-row">
+            <div><label>RUC
+              <input id="cfg-ruc" placeholder="Ej: 80012345-0"></label></div>
+            <div><label>Actividad económica
+              <input id="cfg-actividad" placeholder="Ej: Elaboración y venta de productos de panadería"></label></div>
+          </div>
+          <div class="form-row">
+            <div><label>Dirección
+              <input id="cfg-direccion" placeholder="Ej: Av. España 1234"></label></div>
+            <div><label>Teléfono
+              <input id="cfg-telefono" placeholder="Ej: 021-660123"></label></div>
+          </div>
+          <div class="form-row">
+            <div class="full"><label>Ciudad
+              <input id="cfg-ciudad" placeholder="Ej: Asunción"></label></div>
+          </div>
+          <div class="form-row">
+            <div class="full">
+              <label>Logo del negocio (opcional)</label>
+              <div id="cfg-logo-preview" class="cfg-logo-preview" style="display:none;margin:8px 0 12px;padding:10px;border:1px dashed var(--borde);border-radius:8px;text-align:center;background:var(--crema);"></div>
+              <div class="actions" style="justify-content:flex-start;display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn ghost" id="btn-subir-logo"><i data-lucide="image-plus" style="width:15px;height:15px"></i> Subir logo</button>
+                <button class="btn ghost danger" id="btn-quitar-logo" style="display:none"><i data-lucide="trash-2" style="width:15px;height:15px"></i> Quitar logo</button>
+                <input type="file" id="cfg-logo-input" accept="image/*" style="display:none">
+              </div>
+              <p class="muted" style="margin-top:6px">Sin logo, el comprobante muestra el nombre del negocio.</p>
+            </div>
+          </div>
+          <button class="btn" id="btn-guardar-config"><i data-lucide="save"></i> Guardar configuración</button>
+          <button class="btn ghost" onclick="mostrarTerminos(true)" style="margin-left:8px"><i data-lucide="scroll-text"></i> Términos y Condiciones</button>
+          <p class="msg" id="cfg-msg"></p>
+        </div>
+        <div class="box" style="max-width:760px" id="box-fiscal">
+          <h3>Timbrado y numeración de facturas</h3>
+          <p class="msg err" style="margin:0 0 12px">Configurá solamente datos vigentes y rangos autorizados para emitir. El sistema no solicita ni valida autorización ante la DNIT; verificá con tu contador el régimen de emisión aplicable.</p>
+          <label>Sucursal a configurar
+            <select id="cfg-fiscal-sucursal" class="pos-select full" onchange="cargarConfigFiscal()"></select>
+          </label>
+          <div class="form-row">
+            <div><label>Número de timbrado (8 dígitos)
+              <input id="cfg-fiscal-timbrado" inputmode="numeric" maxlength="8" placeholder="Ej: 12345678"></label></div>
+            <div><label>Vigente hasta
+              <input id="cfg-fiscal-vigencia" type="date"></label></div>
+          </div>
+          <div class="form-row">
+            <div><label>Establecimiento (3 dígitos)
+              <input id="cfg-fiscal-establecimiento" inputmode="numeric" maxlength="3" placeholder="001"></label></div>
+            <div><label>Punto de expedición (3 dígitos)
+              <input id="cfg-fiscal-punto" inputmode="numeric" maxlength="3" placeholder="001"></label></div>
+          </div>
+          <div class="form-row">
+            <div><label>Primera factura autorizada
+              <input id="cfg-fiscal-desde" type="number" min="1" max="9999999" placeholder="1"></label></div>
+            <div><label>Última factura autorizada
+              <input id="cfg-fiscal-hasta" type="number" min="1" max="9999999" placeholder="9999999"></label></div>
+          </div>
+          <button class="btn" id="btn-guardar-fiscal"><i data-lucide="save"></i> Guardar timbrado y numeración</button>
+          <p class="msg" id="cfg-fiscal-msg"></p>
+          <hr>
+          <h3>IVA de los productos</h3>
+          <p class="muted" style="margin-bottom:12px">Asigná la tasa indicada por tu contador a cada producto: exenta, 5% o 10%. Los precios de venta actuales se consideran IVA incluido. Los productos sin tasa asignada no se pueden incluir en una factura.</p>
+          <div class="pos-table-wrap">
+            <table id="cfg-iva-productos"></table>
+          </div>
+          <button class="btn" id="btn-guardar-iva"><i data-lucide="save"></i> Guardar IVA de productos</button>
+          <p class="msg" id="cfg-iva-msg"></p>
+        </div>
+        <div class="box" style="max-width:680px">
+          <h3><i data-lucide="key-round" style="width:15px;height:15px;vertical-align:-2px"></i> Tu contraseña</h3>
+          <p class="muted" style="margin-bottom:12px">Estás entrando como <b id="cfg-usuario">—</b>. Cambiá la contraseña para que nadie más pueda abrir el sistema en esta computadora.</p>
+          <div class="form-row">
+            <div><label>Contraseña actual
+              <input type="password" id="pw-actual" autocomplete="current-password"></label></div>
+            <div><label>Contraseña nueva (mínimo 6 caracteres)
+              <input type="password" id="pw-nueva" autocomplete="new-password"></label></div>
+          </div>
+          <button class="btn" id="btn-cambiar-password"><i data-lucide="shield-check"></i> Cambiar contraseña</button>
+          <p class="msg" id="pw-msg"></p>
+        </div>
+        <div class="box" style="max-width:680px" id="box-sucursales">
+          <h3 style="display:flex;align-items:center;gap:8px"><i data-lucide="store" style="width:15px;height:15px;vertical-align:-2px"></i> Sucursales
+            <span style="flex:1"></span>
+            <button class="btn small" onclick="nuevaSucursal()"><i data-lucide="plus"></i> Nueva sucursal</button>
+          </h3>
+          <p class="muted" style="margin-bottom:12px">Cada sucursal tiene su propia caja y numeración de comprobantes. El inventario (stock) es compartido entre todas.</p>
+          <table id="tabla-sucursales"></table>
+        </div>
+        <div class="box" style="max-width:680px" id="box-usuarios">
+          <h3 style="display:flex;align-items:center;gap:8px"><i data-lucide="users" style="width:15px;height:15px;vertical-align:-2px"></i> Usuarios
+            <span style="flex:1"></span>
+            <button class="btn small" onclick="modalUsuario(null)"><i data-lucide="plus"></i> Nuevo usuario</button>
+          </h3>
+          <p class="muted" style="margin-bottom:12px">Cada usuario entra con su contraseña. Si tiene sucursal asignada, solo puede operar ahí; quien trabaja en "Todas las sucursales" (dueño) ve y administra todo.</p>
+          <table id="tabla-usuarios"></table>
+        </div>
+        <div class="box" style="max-width:680px;border-color:var(--ambar)" id="box-licencia">
+          <h3><i data-lucide="badge-check" style="width:15px;height:15px;vertical-align:-2px;color:var(--ambar)"></i> Versión y licencia</h3>
+          <div id="licencia-box"></div>
+        </div>
+        <div class="box" style="max-width:680px">
+          <h3><i data-lucide="app-window" style="width:15px;height:15px;vertical-align:-2px"></i> Instalar como aplicación</h3>
+          <p class="muted" style="margin-bottom:12px">Instalá el sistema en el escritorio o en la pantalla de inicio del celular para abrirlo directo, sin escribir la dirección cada vez.</p>
+          <div class="actions">
+            <button class="btn" id="btn-instalar"><i data-lucide="app-window"></i> Instalar ahora</button>
+          </div>
+          <p class="msg" id="instalar-msg"></p>
+        </div>
+        <div class="box" style="max-width:680px;border-color:var(--ambar)">
+          <h3><i data-lucide="download" style="width:15px;height:15px;vertical-align:-2px;color:var(--ambar)"></i> Exportar datos (versión completa)</h3>
+          <p class="muted" style="margin-bottom:12px">Descargá copias en <b>CSV (abrible en Excel)</b> de tus ventas, productos, clientes y cajas. Esta función es de la versión completa.</p>
+          <div class="actions" id="export-acciones">
+            <button class="btn ghost" onclick="descargarExportacion('ventas')"><i data-lucide="receipt"></i> Ventas</button>
+            <button class="btn ghost" onclick="descargarExportacion('productos')"><i data-lucide="cake"></i> Productos</button>
+            <button class="btn ghost" onclick="descargarExportacion('clientes')"><i data-lucide="users"></i> Clientes</button>
+            <button class="btn ghost" onclick="descargarExportacion('cajas')"><i data-lucide="wallet"></i> Cajas</button>
+            <button class="btn ghost" onclick="descargarExportacion('creditos')"><i data-lucide="receipt"></i> Créditos</button>
+          </div>
+          <p class="msg" id="export-msg"></p>
+        </div>
+        <div class="box" style="max-width:680px;border-color:var(--ambar)" id="box-demo">
+          <h3><i data-lucide="refresh-ccw" style="width:15px;height:15px;vertical-align:-2px;color:var(--ambar)"></i> Datos de demostración</h3>
+          <p class="muted" style="margin-bottom:12px">Este sistema es una <b>demo</b>: podés probar todo con datos de ejemplo. El botón borra lo que haya cargado (ventas, productos, clientes, cajas) y restaura los datos de prueba de 7 días.</p>
+          <button class="btn" id="btn-reset-demo" style="background:var(--ambar);border-color:var(--ambar)"><i data-lucide="refresh-ccw"></i> Restablecer datos demo</button>
+          <p class="msg" id="reset-demo-msg"></p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="confirm-back" class="modal-back confirm-back hidden">
+    <div class="modal confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+      <div class="modal-head">
+        <h3 id="confirm-title"></h3>
+        <button type="button" class="modal-close" id="confirm-close" aria-label="Cerrar"><i data-lucide="x"></i></button>
+      </div>
+      <p id="confirm-message" class="confirm-message"></p>
+      <div class="actions confirm-actions">
+        <button type="button" class="btn ghost" id="confirm-cancel">Cancelar</button>
+        <button type="button" class="btn" id="confirm-accept">Confirmar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal -->
+  <div id="modal" class="modal-back hidden">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 id="modal-title"></h3>
+        <button class="modal-close" id="modal-close"><i data-lucide="x"></i></button>
+      </div>
+      <div id="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="vendor/lucide.min.js"></script>
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
