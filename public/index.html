@@ -88,16 +88,17 @@
         <button class="nav-item" data-tab="historial-ventas"><span data-lucide="clipboard-list"></span> Control de ventas</button>
 
         <span class="nav-section">Operaciones</span>
-        <button class="nav-item" data-tab="produccion"><span data-lucide="chef-hat"></span> Producción</button>
         <button class="nav-item" data-tab="caja"><span data-lucide="wallet"></span> Caja</button>
         <button class="nav-item" data-tab="gastos"><span data-lucide="receipt"></span> Gastos</button>
 
         <span class="nav-section">Administración</span>
         <button class="nav-item" data-tab="productos"><span data-lucide="cake"></span> Productos</button>
+        <button class="nav-item" data-tab="recetas" id="nav-recetas"><span data-lucide="calculator"></span> Recetas y Costos</button>
         <button class="nav-item" data-tab="clientes"><span data-lucide="users"></span> Clientes</button>
         <button class="nav-item" data-tab="creditos"><span data-lucide="receipt"></span> Créditos / Fiados</button>
         <button class="nav-item" data-tab="reportes"><span data-lucide="trending-up"></span> Reportes</button>
         <button class="nav-item" data-tab="config"><span data-lucide="settings"></span> Configuración</button>
+        <button class="nav-item" data-tab="auditoria" id="nav-auditoria"><span data-lucide="shield-alert"></span> Auditoría</button>
 
         <span class="nav-section">Soporte</span>
         <button class="nav-item" data-tab="ayuda"><span data-lucide="life-buoy"></span> Dudas y ayuda</button>
@@ -230,8 +231,19 @@
                     <option value="efectivo">Efectivo</option>
                     <option value="tarjeta">Tarjeta</option>
                     <option value="transferencia">Transferencia</option>
+                    <option value="mixto">Pago combinado</option>
                     <option value="credito">Crédito / Fiado</option>
                   </select>
+                </div>
+
+                <div class="pos-field" id="pos-pagos-mixtos" style="display:none">
+                  <label>Desglose del pago</label>
+                  <div class="form-row">
+                    <div><label>Efectivo<input type="number" id="pos-pago-efectivo" class="pos-input" min="0" placeholder="0"></label></div>
+                    <div><label>Transferencia<input type="number" id="pos-pago-transferencia" class="pos-input" min="0" placeholder="0"></label></div>
+                    <div><label>Tarjeta<input type="number" id="pos-pago-tarjeta" class="pos-input" min="0" placeholder="0"></label></div>
+                  </div>
+                  <p class="muted" id="pos-pagos-mixtos-resumen">Los importes deben sumar el total de la venta.</p>
                 </div>
 
                 <div class="pos-field" id="pos-recibido-group">
@@ -337,6 +349,69 @@
         </div>
       </section>
 
+      <!-- RECETAS Y COSTOS -->
+      <section id="tab-recetas" class="panel">
+        <div class="page-head">
+          <div>
+            <h2>Recetas y Costos</h2>
+            <p class="muted">Calculá el costo exacto por kilo, unidad o docena y fijá el precio de venta en el mostrador.</p>
+          </div>
+          <button type="button" class="btn ghost" id="btn-nuevo-insumo"><i data-lucide="plus"></i> Nuevo ingrediente / insumo</button>
+        </div>
+
+        <div class="grid2">
+          <!-- Costeador -->
+          <div class="box">
+            <div class="page-head" style="margin-bottom:10px">
+              <div>
+                <h3>Fórmula del producto</h3>
+                <p class="muted" id="receta-producto-info">Seleccioná un producto para ver o calcular su costo.</p>
+              </div>
+            </div>
+            <div style="margin-bottom:14px">
+              <label style="font-weight:600;display:block">Producto a costear
+                <select id="receta-producto" class="pos-select full" style="width:100%;margin-top:6px;font-size:15px;padding:8px 12px"></select>
+              </label>
+            </div>
+
+            <div id="receta-editor" class="hidden" style="margin-top:14px">
+              <div class="grid2">
+                <label><span id="receta-rendimiento-label">Rendimiento de la receta</span>
+                  <input type="number" id="receta-rendimiento" min="0.001" step="0.001" placeholder="Ej.: 10">
+                  <small class="muted" id="receta-rendimiento-help">Cantidad obtenida de producto.</small>
+                </label>
+                <label>Recargo sobre el costo (%)
+                  <input type="number" id="receta-margen" min="0" max="1000" step="0.1" value="40">
+                  <small class="muted">Margen deseado (ej: 40%).</small>
+                </label>
+              </div>
+
+              <h4 style="margin:16px 0 8px 0">Ingredientes necesarios</h4>
+              <div id="receta-insumos" style="margin:8px 0"></div>
+
+              <div class="actions" style="margin-top:12px">
+                <button type="button" class="btn ghost small" id="btn-agregar-ingrediente"><i data-lucide="plus"></i> Agregar ingrediente</button>
+                <button type="button" class="btn" id="btn-guardar-receta"><i data-lucide="calculator"></i> Guardar receta y calcular</button>
+              </div>
+
+              <p class="msg" id="receta-msg" style="margin-top:10px"></p>
+              <div id="receta-costeo" style="margin-top:14px"></div>
+            </div>
+          </div>
+
+          <!-- Insumos -->
+          <div class="box">
+            <div class="page-head" style="margin-bottom:10px">
+              <div>
+                <h3>Precios de materias primas</h3>
+                <p class="muted">Costos de compra de harina, levadura, manteca, etc.</p>
+              </div>
+            </div>
+            <table id="tabla-insumos"></table>
+          </div>
+        </div>
+      </section>
+
       <!-- CLIENTES -->
       <section id="tab-clientes" class="panel">
         <div class="page-head">
@@ -364,36 +439,16 @@
         </div>
       </section>
 
-      <!-- PRODUCCION -->
-      <section id="tab-produccion" class="panel">
-        <div class="page-head">
-          <h2>Producción</h2>
-        </div>
-        <div class="grid2">
-          <div class="box">
-            <h3>Registrar producción</h3>
-            <p class="muted" style="margin-bottom:12px">Cargá lo que horneaste y el stock del producto se suma solo.</p>
-            <label>Producto
-              <select id="select-prod"></select>
-            </label>
-            <label>Cantidad
-              <input type="number" id="prod-cantidad" value="" min="0.001" step="any">
-            </label>
-            <button class="btn" id="btn-producir"><i data-lucide="chef-hat"></i> Registrar producción</button>
-            <p class="msg" id="prod-msg"></p>
-          </div>
-          <div class="box">
-            <h3>Historial de producción</h3>
-            <table id="tabla-lotes"></table>
-          </div>
-        </div>
-      </section>
-
       <!-- REPORTES -->
       <section id="tab-reportes" class="panel">
         <div class="page-head">
           <h2>Reportes</h2>
         </div>
+        <div class="seg" id="rep-vistas">
+          <button class="activo" data-reporte="dia"><i data-lucide="calendar-days"></i> Reporte diario</button>
+          <button data-reporte="rango"><i data-lucide="history"></i> Histórico por período</button>
+        </div>
+        <div id="rep-dia-vista">
         <div class="filtro-reporte hidden" id="rep-filtro"></div>
         <div class="box">
           <label>Fecha del reporte
@@ -414,6 +469,60 @@
         <div class="box">
           <h3>Historial de cajas</h3>
           <table id="rep-cajas"></table>
+        </div>
+        </div>
+        <div id="rep-rango-vista" class="hidden">
+          <div class="box">
+            <form id="rep-rango-form" class="form-row" style="align-items:end">
+              <label>Desde
+                <input type="date" id="rep-rango-desde" required>
+              </label>
+              <label>Hasta
+                <input type="date" id="rep-rango-hasta" required>
+              </label>
+              <div><button class="btn" type="submit"><i data-lucide="search"></i> Consultar período</button></div>
+            </form>
+            <p class="msg" id="rep-rango-msg"></p>
+            <div class="cards" id="rep-rango-cards"></div>
+          </div>
+          <div class="grid2">
+            <div class="box">
+              <h3>Ventas por día</h3>
+              <table id="rep-rango-ventas"></table>
+            </div>
+            <div class="box">
+              <h3>Recaudación por medio de pago</h3>
+              <table id="rep-rango-pagos"></table>
+            </div>
+          </div>
+          <div class="box">
+            <h3>Productos — total del período</h3>
+            <table id="rep-rango-productos-total"></table>
+          </div>
+          <div class="box">
+            <h3>Productos vendidos por día</h3>
+            <table id="rep-rango-productos-dia"></table>
+          </div>
+          <div class="grid2">
+            <div class="box">
+              <h3>Producción por día</h3>
+              <table id="rep-rango-produccion"></table>
+            </div>
+            <div class="box">
+              <h3>Gastos por categoría</h3>
+              <table id="rep-rango-gastos-categoria"></table>
+            </div>
+          </div>
+          <div class="grid2">
+            <div class="box">
+              <h3>Gastos por día</h3>
+              <table id="rep-rango-gastos"></table>
+            </div>
+            <div class="box">
+              <h3>Caja por día</h3>
+              <table id="rep-rango-cajas"></table>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -526,10 +635,10 @@
           <div class="box">
             <h3>Rutina diaria (paso a paso)</h3>
             <div class="cuerpo pasos">
-              <p><b>1. Abrir la caja.</b> Andá a <b>Caja</b> y cargá el efectivo inicial. Mientras la caja esté abierta, todas las ventas y gastos se registran como movimientos de caja automáticamente.</p>
+              <p><b>1. Abrir la caja.</b> Andá a <b>Caja</b> y cargá el efectivo inicial. Mientras la caja esté abierta, las ventas y los gastos se registran para esa sucursal y ese día.</p>
               <p><b>2. Vender.</b> Usá el <b>Punto de venta</b>: tocá los productos, cobrá y emití el comprobante.</p>
               <p><b>3. Registrar gastos.</b> Andá a <b>Gastos</b> y cargá los gastos del día (luz, agua, insumos, etc.). Se descuentan de la caja del día.</p>
-              <p><b>4. Cerrar la caja.</b> Al terminar el día, en <b>Caja</b> contá el dinero real y cargalo en "Cerrar esta caja". El sistema calcula el esperado y la diferencia.</p>
+              <p><b>4. Cerrar la caja.</b> Al terminar el día, en <b>Caja</b> contá cada billete y moneda en "Cerrar esta caja". El sistema calcula el efectivo esperado y la diferencia; las transferencias y tarjetas se ven por separado.</p>
               <p><b>5. Revisar el Panel.</b> Ventas, gastos, producción y el gráfico de la semana.</p>
             </div>
           </div>
@@ -539,13 +648,15 @@
             <details>
               <summary>¿Cómo vendo un producto?</summary>
               <div class="cuerpo">
-                <p>En <b>Punto de venta</b> tocá <b>Buscar por nombre, código o categoría</b>, elegí el producto en la ventana de búsqueda y se agrega al ticket. Revisá las cantidades y el total, elegí comprobante y forma de pago, y tocá <b>Cobrar</b>. Si pagás en efectivo, cargá lo que recibís para calcular el <b>vuelto</b>; al confirmar se imprime el comprobante.</p>
+                <p>En <b>Punto de venta</b> tocá <b>Buscar por nombre, código o categoría</b>, elegí el producto en la ventana de búsqueda y se agrega al ticket. Revisá las cantidades y el total, elegí comprobante y forma de pago, y tocá <b>Cobrar</b>. Podés combinar efectivo, transferencia y tarjeta; los importes deben sumar el total. Si pagás solo en efectivo, cargá lo que recibís para calcular el <b>vuelto</b>; al confirmar se imprime el comprobante.</p>
+                <p>Atajos: <b>F2</b> buscar producto, <b>F4</b> seleccionar cliente y <b>F9</b> cobrar. Funcionan en el Punto de venta cuando no estás escribiendo en un campo.</p>
               </div>
             </details>
             <details>
               <summary>¿Cómo vendo por kilo?</summary>
               <div class="cuerpo">
-                <p>Los productos como pan francés, pan integral o chipa se venden <b>por peso</b>. Al tocar el producto se pide el peso en kilogramos (ej: 0,500 = medio kilo). El total se calcula con el precio por kg.</p>
+                <p>Los productos por kilo permiten ingresar el <b>peso o el importe</b>; el otro valor se calcula automáticamente. El peso admite hasta tres decimales (ej.: 0,500 kg). Al ingresar el importe, se conserva exactamente ese monto y se calcula el peso redondeado a tres decimales.</p>
+                <p>En productos por unidad o docena también podés indicar cantidad o importe, incluidas cantidades fraccionarias de hasta tres decimales.</p>
               </div>
             </details>
             <details>
@@ -588,6 +699,12 @@
                 <p>Sí. No hace falta materia prima ni receta: registrás la producción real y el sistema solo suma el stock. Las ventas de ese día van acorde al stock disponible.</p>
               </div>
             </details>
+            <details>
+              <summary>¿Cómo calculo el costo de una receta?</summary>
+              <div class="cuerpo">
+                <p>En <b>Producción → Fórmulas y costos</b>, cargá los insumos con su costo por kg, litro o unidad. Después seleccioná el producto, agregá las cantidades y unidades de cada ingrediente, y definí el rendimiento de la receta. El sistema calcula el costo por lote y por unidad, y sugiere un precio con el recargo configurado (40% por defecto). Guardar la fórmula no descuenta insumos, no suma producción ni cambia el precio de venta; podés aplicar el precio sugerido cuando lo confirmes.</p>
+              </div>
+            </details>
           </div>
 
           <div class="box">
@@ -623,13 +740,7 @@
             <details>
               <summary>¿Qué es el "cierre esperado"?</summary>
               <div class="cuerpo">
-                <p>Es la plata que <b>debería haber</b> en caja: apertura + todas las ventas − todos los gastos y egresos del día. Al cerrar, cargás el <b>cierre real</b> (lo que contaste) y la <b>diferencia</b> es real menos esperado. Si no coincide, revisá los movimientos.</p>
-              </div>
-            </details>
-            <details>
-              <summary>¿Cómo agrego un egreso fuera de las ventas?</summary>
-              <div class="cuerpo">
-                <p>Con la caja abierta, en <b>Caja</b> usá <b>Registrar egreso</b> (ej: retiro de efectivo). También podés registrarlo como <b>Gasto</b>, que se vincula solo.</p>
+                <p>Es el efectivo que <b>debería haber</b> en caja: apertura + ventas en efectivo y abonos − gastos y egresos. Las transferencias y tarjetas se muestran aparte para comparar con sus comprobantes. Al cerrar, cargá la cantidad de cada billete y moneda; el sistema suma el <b>cierre real</b> y calcula la <b>diferencia</b>.</p>
               </div>
             </details>
             <details>
@@ -680,7 +791,7 @@
             <details>
               <summary>¿Qué muestra Reportes?</summary>
               <div class="cuerpo">
-                <p>El <b>reporte del día</b>: total vendido por forma de pago, producción, productos más vendidos y caja. El <b>Panel</b> muestra además la semana, el top de productos y el stock de los productos.</p>
+                <p>En <b>Reporte diario</b> consultás ventas, productos vendidos, producción y cajas de una fecha. En <b>Histórico por período</b> elegís fechas desde/hasta para ver ventas por día, cobros por medio de pago, productos por día y acumulados, producción, gastos y cajas. En la versión de prueba el período debe estar dentro de los últimos 7 días; el dueño puede filtrar una sucursal o consultar todas. El <b>Panel</b> muestra además la semana, el top de productos y el stock.</p>
               </div>
             </details>
             <details>
@@ -897,6 +1008,51 @@
           <p class="muted" style="margin-bottom:12px">Este sistema es una <b>demo</b>: podés probar todo con datos de ejemplo. El botón borra lo que haya cargado (ventas, productos, clientes, cajas) y restaura los datos de prueba de 7 días.</p>
           <button class="btn" id="btn-reset-demo" style="background:var(--ambar);border-color:var(--ambar)"><i data-lucide="refresh-ccw"></i> Restablecer datos demo</button>
           <p class="msg" id="reset-demo-msg"></p>
+        </div>
+      </section>
+
+      <!-- AUDITORÍA -->
+      <section id="tab-auditoria" class="panel">
+        <div class="page-head">
+          <div>
+            <h2>Auditoría del negocio</h2>
+            <p class="muted">Registro de operaciones sensibles: anulaciones de ventas, reaperturas de caja y cambios de precios.</p>
+          </div>
+        </div>
+        <div class="box" style="margin-bottom:14px">
+          <div class="form-row" style="align-items:end">
+            <div>
+              <label>Tipo de operación
+                <select id="audit-filtro-accion" class="pos-select full" onchange="cargarAuditoria(1)">
+                  <option value="">Todas las operaciones</option>
+                  <option value="anular_venta">Anulación de ventas</option>
+                  <option value="reabrir_caja">Reapertura de cajas</option>
+                  <option value="cambio_precio">Cambios de precios</option>
+                </select>
+              </label>
+            </div>
+            <div id="audit-sucursal-wrap">
+              <label>Sucursal
+                <select id="audit-filtro-sucursal" class="pos-select full" onchange="cargarAuditoria(1)"></select>
+              </label>
+            </div>
+            <div>
+              <label>Desde
+                <input type="date" id="audit-filtro-desde" onchange="cargarAuditoria(1)">
+              </label>
+            </div>
+            <div>
+              <label>Hasta
+                <input type="date" id="audit-filtro-hasta" onchange="cargarAuditoria(1)">
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="box">
+          <div class="pos-table-wrap">
+            <table id="tabla-auditoria"></table>
+          </div>
+          <div class="paginacion" id="audit-paginacion" style="margin-top:14px;display:flex;justify-content:space-between;align-items:center"></div>
         </div>
       </section>
     </main>

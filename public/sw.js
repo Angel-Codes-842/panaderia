@@ -1,8 +1,8 @@
 /* Service Worker — Sistema de Gestión de la Panadería
    Cachea la interfaz para arranque rápido y funcionamiento sin internet. */
 
-const VERSION = 'pan-shell-v13';
-const RUNTIME = 'pan-runtime-v13';
+const VERSION = 'pan-shell-v27';
+const RUNTIME = 'pan-runtime-v27';
 
 const SHELL = [
   '/',

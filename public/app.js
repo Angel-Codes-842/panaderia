@@ -3,15 +3,31 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 const fmtGs = (n) => '₲\u00a0' + Number(n || 0).toLocaleString('es-PY', { maximumFractionDigits: 0 });
 const fmtGs2 = (n) => '₲\u00a0' + Number(n || 0).toLocaleString('es-PY', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 const fmtFecha = (iso) => { const [y, m, d] = iso.split('-'); return `${d}/${m}/${y}`; };
+const fmtFechaHora = (iso) => {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+};
+
+document.addEventListener('wheel', (e) => {
+  if (e.target instanceof HTMLInputElement && e.target.type === 'number') e.preventDefault();
+}, { passive: false });
 
 let productosGlobal = [];
 let clientesGlobal = [];
 const carrito = new Map();
+const importesCarrito = new Map();
 
 // Mantener el carrito entre cambios de pestaña (el flujo rápido pide no
 // perderlo al pasar por otros módulos).
 function guardarCarrito() {
-  try { localStorage.setItem('panaderia_carrito', JSON.stringify([...carrito.entries()])); } catch (_) {}
+  try {
+    localStorage.setItem('panaderia_carrito', JSON.stringify(
+      [...carrito.entries()].map(([id, cantidad]) => [id, cantidad, importesCarrito.get(id) ?? null])
+    ));
+  } catch (_) {}
 }
 function cargarCarritoGuardado() {
   try {
@@ -19,9 +35,14 @@ function cargarCarritoGuardado() {
     if (!raw) return;
     const items = JSON.parse(raw);
     carrito.clear();
-    for (const [id, cant] of items) {
+    importesCarrito.clear();
+    for (const [id, cant, importe] of items) {
       const pid = Number(id);
-      if (Number.isFinite(pid) && Number(cant) > 0) carrito.set(pid, Number(cant));
+      if (!Number.isFinite(pid) || Number(cant) <= 0) continue;
+      carrito.set(pid, Number(cant));
+      if (importe !== null && importe !== undefined && Number.isFinite(Number(importe)) && Number(importe) >= 0) {
+        importesCarrito.set(pid, Number(importe));
+      }
     }
   } catch (_) {}
 }
@@ -251,6 +272,10 @@ function ocultarLogin(usuario, sesion) {
   $('#login').classList.add('hidden');
   $('.layout').style.display = '';
   if (usuarioActual) $('#usuario-actual').textContent = `(${usuarioActual})`;
+  const navAudit = $('#nav-auditoria');
+  if (navAudit) navAudit.style.display = esDueño ? '' : 'none';
+  const navRecetas = $('#nav-recetas');
+  if (navRecetas) navRecetas.style.display = esDueño ? '' : 'none';
 }
 
 function mostrarLogin() {
@@ -541,6 +566,8 @@ const cargadores = {
   },
   produccion: cargarProduccion,
   reportes: cargarReportes, caja: cargarCaja, gastos: cargarGastos, config: cargarConfig,
+  recetas: () => { if (typeof cargarRecetasTab === 'function') cargarRecetasTab(); },
+  auditoria: () => { if (typeof cargarAuditoria === 'function') cargarAuditoria(); },
   ayuda: () => {}
 };
 function irATab(tab) {
@@ -606,6 +633,10 @@ async function cargarPos() {
   if (fpago) { fpago.value = 'efectivo'; fpago.onchange = calcularVuelto; }
   const recibido = $('#pos-recibido');
   if (recibido) { recibido.value = ''; recibido.oninput = calcularVuelto; }
+  ['efectivo', 'transferencia', 'tarjeta'].forEach((medio) => {
+    const input = $(`#pos-pago-${medio}`);
+    if (input) { input.value = ''; input.oninput = calcularVuelto; }
+  });
   const desc = $('#pos-descuento');
   if (desc) desc.value = 0;
   if (desc) desc.oninput = calcularTotalBoutique;
@@ -671,7 +702,7 @@ function pintarResultadosBuscarPOS(consulta) {
     const agotado = p.stock <= 0;
     const esKg = p.unidad === 'kg';
     const codigo = p.codigo || p.code || 'Sin código';
-    const stock = agotado ? 'Sin stock' : (esKg ? `${p.stock.toFixed(2)} kg` : `${p.stock} und`);
+    const stock = agotado ? 'Sin stock' : unidadLabel(p.unidad, p.stock);
     return `<button type="button" class="pos-search-result" ${agotado ? 'disabled' : ''} onclick="seleccionarProductoBuscarPOS(${p.id})">
       <span class="pos-search-result-info">
         <strong>${escapeHtml(p.nombre)}</strong>
@@ -689,49 +720,100 @@ function seleccionarProductoBuscarPOS(id) {
 
 function agregarAlTicket(id) {
   const p = productosGlobal.find((x) => x.id === id);
-  if (p.unidad === 'kg') return pedirPeso(id);
-  if (p.stock <= (carrito.get(id) || 0)) return toast(`Stock insuficiente de ${p.nombre}`, 'warn');
-  carrito.set(id, (carrito.get(id) || 0) + 1);
-  guardarCarrito();
-  pintarTicket();
+  if (!p || !p.activo) return toast('El producto no está disponible', 'warn');
+  pedirCantidadProducto(id);
 }
 
-function pedirPeso(id) {
+function pedirCantidadProducto(id) {
   const p = productosGlobal.find((x) => x.id === id);
-  abrirModal(`Vender ${p.nombre} por peso`, `
-    <p class="muted">Precio: <b>${fmtGs(p.precio_venta)}/kg</b> — Stock disponible: <b>${p.stock.toFixed(2)} kg</b></p>
-    <label>Peso (kg)<input type="number" id="peso-input" step="0.05" min="0.05" placeholder="Ej: 0.5"></label>
-    <div class="pesos-rapidos">
-      <button class="btn small ghost" onclick="pesoRapido(0.25)">0,25</button>
-      <button class="btn small ghost" onclick="pesoRapido(0.5)">0,5</button>
-      <button class="btn small ghost" onclick="pesoRapido(1)">1</button>
-      <button class="btn small ghost" onclick="pesoRapido(2)">2</button>
+  if (!p) return;
+  const unidad = p.unidad === 'kg' ? 'kg' : p.unidad === 'docena' ? 'docena' : 'unidad';
+  const cantidadActual = carrito.get(id) || 0;
+  const stockDisponible = Math.max(0, p.stock - cantidadActual);
+  if (stockDisponible <= 0) return toast(`Stock insuficiente de ${p.nombre}`, 'warn');
+  const cantidadInicial = Math.min(p.unidad === 'kg' ? 0.5 : 1, stockDisponible);
+  abrirModal(`Agregar ${p.nombre}`, `
+    <p class="muted">Precio por ${unidad}: <b>${fmtGs(p.precio_venta)}</b> · Disponible: <b>${stockDisponible.toLocaleString('es-PY', { maximumFractionDigits: 3 })} ${unidad}</b></p>
+    <div class="form-row">
+      <div><label>Cantidad (${unidad})<input type="number" id="producto-cantidad" min="0.001" max="${stockDisponible}" step="0.001" value="${cantidadInicial || ''}" placeholder="Ej: 0,500"></label></div>
+      <div><label>Importe (₲)<input type="number" id="producto-importe" min="0" step="any" placeholder="Ingresá cantidad o importe"></label></div>
     </div>
-    <p id="peso-prev" class="prev-box muted" style="display:none"></p>
-    <button class="btn" style="width:100%;margin-top:12px" onclick="confirmarPeso(${id})">Agregar al ticket</button>`);
-  const input = $('#peso-input');
-  input.oninput = () => {
-    const kg = parseFloat(input.value);
-    $('#peso-prev').style.display = kg > 0 ? 'block' : 'none';
-    $('#peso-prev').innerHTML = `${kg.toFixed(2)} kg × ${fmtGs(p.precio_venta)}/kg = <b>${fmtGs(kg * p.precio_venta)}</b>`;
+    <p id="producto-prev" class="prev-box muted" style="display:none"></p>
+    <button class="btn" style="width:100%;margin-top:12px" onclick="confirmarCantidadProducto(${id})">Agregar al ticket</button>`);
+  const cantidadInput = $('#producto-cantidad');
+  const importeInput = $('#producto-importe');
+  const actualizarVistaPrevia = (importeIngresado = null) => {
+    const cantidad = Number(cantidadInput.value);
+    const importeCalculado = cantidad * p.precio_venta;
+    const prev = $('#producto-prev');
+    if (!cantidad || !Number.isFinite(cantidad) || cantidad <= 0) {
+      prev.style.display = 'none';
+      return;
+    }
+    const cantidadTexto = cantidad.toLocaleString('es-PY', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
+    prev.style.display = 'block';
+    prev.textContent = importeIngresado === null
+      ? `${cantidadTexto} ${unidad} × ${fmtGs(p.precio_venta)} = ${fmtGs(importeCalculado)}`
+      : `Importe ingresado: ${fmtGs(importeIngresado)} · Se cobrarán ${fmtGs(importeCalculado)} por ${cantidadTexto} ${unidad}`;
   };
-  if (!$('#peso-input')) input.focus();
+  cantidadInput.oninput = () => {
+    cantidadInput.dataset.origen = 'cantidad';
+    cantidadInput.step = '0.001';
+    const cantidad = Number(cantidadInput.value);
+    if (Number.isFinite(cantidad) && cantidad >= 0) {
+      importeInput.value = cantidad > 0 ? String(cantidad * p.precio_venta) : '';
+    } else {
+      importeInput.value = '';
+    }
+    actualizarVistaPrevia();
+  };
+  importeInput.oninput = () => {
+    cantidadInput.dataset.origen = 'importe';
+    cantidadInput.step = 'any';
+    if (importeInput.value === '') {
+      cantidadInput.value = '';
+      actualizarVistaPrevia();
+      return;
+    }
+    const importe = Number(importeInput.value);
+    if (!Number.isFinite(importe) || importe < 0 || p.precio_venta <= 0) {
+      cantidadInput.value = '';
+      actualizarVistaPrevia();
+      return;
+    }
+    const cantidad = Math.round((importe / p.precio_venta) * 1000) / 1000;
+    cantidadInput.value = cantidad > 0 ? String(cantidad) : '';
+    actualizarVistaPrevia(importe);
+    if (importe > 0 && p.precio_venta > 0 && Number(cantidadInput.value) === 0) {
+      const prev = $('#producto-prev');
+      prev.style.display = 'block';
+      prev.textContent = `El importe no alcanza para una cantidad mínima de 0,001 ${unidad}.`;
+    }
+  };
+  cantidadInput.dispatchEvent(new Event('input'));
+  cantidadInput.focus();
 }
 
-function pesoRapido(kg) {
-  const input = $('#peso-input');
-  if (!input) return;
-  input.value = kg;
-  input.dispatchEvent(new Event('input'));
-  input.focus();
-}
-
-function confirmarPeso(id) {
+function confirmarCantidadProducto(id) {
   const p = productosGlobal.find((x) => x.id === id);
-  const kg = parseFloat($('#peso-input').value);
-  if (!kg || kg <= 0) return toast('Ingresá un peso válido', 'warn');
-  if (kg > p.stock) return toast(`Stock insuficiente: hay ${p.stock.toFixed(2)} kg`, 'err');
-  carrito.set(id, (carrito.get(id) || 0) + kg);
+  const ingresada = Number($('#producto-cantidad')?.value);
+  if (!p || !Number.isFinite(ingresada) || ingresada <= 0) return toast('Ingresá una cantidad válida', 'warn');
+  const desdeImporte = $('#producto-cantidad')?.dataset.origen === 'importe';
+  const cantidad = Math.round(ingresada * 1000) / 1000;
+  if (Math.abs(cantidad - ingresada) > 0.00000001) return toast('La cantidad admite hasta tres decimales', 'warn');
+  const cantidadAnterior = carrito.get(id) || 0;
+  const total = cantidadAnterior + cantidad;
+  if (total > p.stock + 0.000001) {
+    const unidad = p.unidad === 'kg' ? 'kg' : 'unidades';
+    return toast(`Stock insuficiente: quedan ${(p.stock - (carrito.get(id) || 0)).toLocaleString('es-PY', { maximumFractionDigits: 3 })} ${unidad}`, 'err');
+  }
+  carrito.set(id, Math.round(total * 1000) / 1000);
+  if (desdeImporte) {
+    const importeAnterior = importesCarrito.has(id) ? importesCarrito.get(id) : cantidadAnterior * p.precio_venta;
+    importesCarrito.set(id, importeAnterior + Number($('#producto-importe').value));
+  } else {
+    importesCarrito.delete(id);
+  }
   modal.classList.add('hidden');
   guardarCarrito();
   pintarTicket();
@@ -741,9 +823,10 @@ function cambiarCant(id, delta) {
   const p = productosGlobal.find((x) => x.id === id);
   const paso = p.unidad === 'kg' ? 0.1 : 1;
   const nueva = Math.round(((carrito.get(id) || 0) + delta * paso) * 1000) / 1000;
-  if (nueva <= 0) { carrito.delete(id); guardarCarrito(); return pintarTicket(); }
+  if (nueva <= 0) { carrito.delete(id); importesCarrito.delete(id); guardarCarrito(); return pintarTicket(); }
   if (nueva > p.stock) return toast(`Stock insuficiente de ${p.nombre}`, 'warn');
   carrito.set(id, nueva);
+  importesCarrito.delete(id);
   guardarCarrito();
   pintarTicket();
 }
@@ -776,9 +859,9 @@ function pintarCarrito() {
     const p = productosGlobal.find((x) => x.id === id);
     if (!p) return '';
     const esKg = p.unidad === 'kg';
-    const linea = p.precio_venta * cant;
+    const linea = importesCarrito.get(id) ?? p.precio_venta * cant;
     subtotal += linea;
-    const cantShow = esKg ? cant.toFixed(2) : cant;
+    const cantShow = cant.toLocaleString('es-PY', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
     return `<tr>
       <td>${escapeHtml(p.nombre)}</td>
       <td class="center">
@@ -817,6 +900,7 @@ const pintarTicket = pintarCarrito;
 
 function quitarDelTicket(id) {
   carrito.delete(id);
+  importesCarrito.delete(id);
   guardarCarrito();
   pintarCarrito();
 }
@@ -824,12 +908,14 @@ function quitarDelTicket(id) {
 function vaciarCarrito() {
   if (!carrito.size) return;
   carrito.clear();
+  importesCarrito.clear();
   guardarCarrito();
   pintarCarrito();
 }
 
 function nuevaVentaPOS() {
   carrito.clear();
+  importesCarrito.clear();
   try { localStorage.removeItem('panaderia_carrito'); } catch (_) {}
   posClienteSel = null;
   actualizarClientePOS();
@@ -837,6 +923,10 @@ function nuevaVentaPOS() {
   if (rec) rec.value = '';
   const fp = $('#pos-forma-pago');
   if (fp) fp.value = 'efectivo';
+  ['efectivo', 'transferencia', 'tarjeta'].forEach((medio) => {
+    const input = $(`#pos-pago-${medio}`);
+    if (input) input.value = '';
+  });
   const tipo = $('#pos-tipo-comprobante');
   if (tipo) tipo.value = 'ticket';
   const desc = $('#pos-descuento');
@@ -871,9 +961,11 @@ function agregarPorCodigoPOS(e) {
 if (typeof document !== 'undefined') {
   document.addEventListener('keydown', (e) => {
     const tag = document.activeElement && document.activeElement.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-    if (e.key === 'F2') { e.preventDefault(); $('#btn-vender')?.click(); }
-    if (e.key === 'F8') { e.preventDefault(); nuevaVentaPOS(); }
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+        !$('#tab-ventas')?.classList.contains('active') || !$('#modal')?.classList.contains('hidden')) return;
+    if (e.key === 'F2') { e.preventDefault(); abrirBuscarProductoPOS(); }
+    if (e.key === 'F4') { e.preventDefault(); abrirSelectorClientePOS(); }
+    if (e.key === 'F9') { e.preventDefault(); $('#btn-vender')?.click(); }
   });
 }
 
@@ -921,6 +1013,7 @@ function aplicarClientePOS() {
 
 function calcularVuelto() {
   const fp = $('#pos-forma-pago')?.value || 'efectivo';
+  const mixtos = $('#pos-pagos-mixtos');
   const recEl = $('#pos-recibido');
   const grp = $('#pos-recibido-group');
   const label = $('#pos-recibido-label');
@@ -929,7 +1022,25 @@ function calcularVuelto() {
   const swrap = $('#pos-saldo-wrap');
   const sval = $('#pos-saldo');
   const { totalNum } = (function () { const t = $('#pos-total-pagar')?.textContent || '₲ 0'; return { totalNum: Number(String(t).replace(/[^0-9]/g, '')) }; })();
+  if (mixtos) mixtos.style.display = fp === 'mixto' ? 'block' : 'none';
   if (swrap) swrap.style.display = 'none';
+  if (fp === 'mixto') {
+    if (grp) grp.style.display = 'none';
+    if (wrap) wrap.style.display = 'none';
+    const pagado = ['efectivo', 'transferencia', 'tarjeta'].reduce(
+      (total, medio) => total + Math.max(0, Number($(`#pos-pago-${medio}`)?.value || 0)), 0
+    );
+    const resumen = $('#pos-pagos-mixtos-resumen');
+    if (resumen) {
+      const diferencia = totalNum - pagado;
+      resumen.textContent = Math.abs(diferencia) < 0.01
+        ? `Desglose completo: ${fmtGs(pagado)}`
+        : diferencia > 0
+          ? `Falta asignar ${fmtGs(diferencia)}`
+          : `El desglose excede el total por ${fmtGs(Math.abs(diferencia))}`;
+    }
+    return;
+  }
   if (fp === 'efectivo') {
     if (grp) grp.style.display = 'flex';
     if (label) label.textContent = 'Monto recibido';
@@ -960,7 +1071,10 @@ function calcularVuelto() {
 function abrirCheckout(clientePreseleccionado) {
   if (!carrito.size) return toast('El ticket está vacío', 'warn');
   let total = 0;
-  for (const [id, cant] of carrito) total += productosGlobal.find((x) => x.id === id).precio_venta * cant;
+  for (const [id, cant] of carrito) {
+    const producto = productosGlobal.find((x) => x.id === id);
+    if (producto) total += importesCarrito.get(id) ?? producto.precio_venta * cant;
+  }
   const clienteOpts = '<option value="">Consumidor Final</option>' + clientesGlobal.map((c) => `<option value="${c.id}">${escapeHtml(c.nombre || (c.tipo_documento + ' ' + c.documento))}</option>`).join('');
   abrirModal('Cobrar', `
     <div class="checkout-total">
@@ -978,7 +1092,16 @@ function abrirCheckout(clientePreseleccionado) {
           <option value="efectivo">Efectivo</option>
           <option value="transferencia">Transferencia</option>
           <option value="tarjeta">Tarjeta</option>
+          <option value="mixto">Pago combinado</option>
         </select></label></div>
+    </div>
+    <div id="co-pagos-mixtos" style="display:none">
+      <div class="form-row">
+        <div><label>Efectivo<input type="number" id="co-pago-efectivo" min="0" placeholder="0"></label></div>
+        <div><label>Transferencia<input type="number" id="co-pago-transferencia" min="0" placeholder="0"></label></div>
+        <div><label>Tarjeta<input type="number" id="co-pago-tarjeta" min="0" placeholder="0"></label></div>
+      </div>
+      <p class="muted" id="co-pagos-resumen">Los importes deben sumar el total de la venta.</p>
     </div>
     <div id="co-doc-wrap" class="ac-wrap"><label>Buscar cliente por documento (CI o RUC)
       <input id="co-doc" placeholder="Tipeá la cédula o el RUC..." autocomplete="off"></label></div>
@@ -1005,13 +1128,29 @@ function abrirCheckout(clientePreseleccionado) {
   const recalcular = () => {
     const ef = pago.value === 'efectivo';
     wrap.style.display = ef ? 'block' : 'none';
+    const mixtos = pago.value === 'mixto';
+    $('#co-pagos-mixtos').style.display = mixtos ? 'block' : 'none';
     const r = parseFloat(recibido.value) || 0;
     vuelto.classList.toggle('visible', ef && r > total);
     vuelto.textContent = r > total ? `Vuelto: ${fmtGs(r - total)}` : '';
+    if (mixtos) {
+      const suma = ['efectivo', 'transferencia', 'tarjeta'].reduce(
+        (a, medio) => a + Number($(`#co-pago-${medio}`).value || 0), 0
+      );
+      const diferencia = total - suma;
+      $('#co-pagos-resumen').textContent = Math.abs(diferencia) < 0.01
+        ? `Desglose completo: ${fmtGs(suma)}`
+        : diferencia > 0
+          ? `Falta asignar ${fmtGs(diferencia)}`
+          : `El desglose excede el total por ${fmtGs(Math.abs(diferencia))}`;
+    }
   };
   tipo.addEventListener('change', () => { aviso.style.display = tipo.value === 'factura' ? 'block' : 'none'; });
   pago.addEventListener('change', recalcular);
   recibido.addEventListener('input', recalcular);
+  ['efectivo', 'transferencia', 'tarjeta'].forEach((medio) => {
+    $(`#co-pago-${medio}`).addEventListener('input', recalcular);
+  });
   recalcular();
   reicons();
 }
@@ -1029,14 +1168,33 @@ async function confirmarVenta() {
   if (tipo === 'factura' && !clienteId) return toast('La factura requiere un cliente identificado.', 'warn');
   const pago = $('#co-pago').value;
   const recibido = parseFloat($('#co-recibido').value) || 0;
+  const total = [...carrito.entries()].reduce((suma, [id, cantidad]) => {
+    const producto = productosGlobal.find((p) => p.id === id);
+    return suma + (producto ? importesCarrito.get(id) ?? producto.precio_venta * cantidad : 0);
+  }, 0);
+  if (pago === 'efectivo' && recibido < total) return toast('El monto recibido es menor al total', 'warn');
+  let pagos;
+  if (pago === 'mixto') {
+    pagos = Object.fromEntries(['efectivo', 'transferencia', 'tarjeta'].map((medio) => [
+      medio, Number($(`#co-pago-${medio}`).value || 0),
+    ]));
+    const suma = Object.values(pagos).reduce((a, b) => a + b, 0);
+    if (Object.values(pagos).some((monto) => !Number.isFinite(monto) || monto < 0) || Math.abs(suma - total) > 0.009) {
+      return toast('Los medios de pago deben sumar exactamente el total de la venta', 'warn');
+    }
+  }
   const btn = $('#modal').querySelector('.actions .btn:last-child');
   btn.disabled = true;
   btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;border-width:2px;margin:0 auto"></div>';
-  const items = [...carrito.entries()].map(([id, cantidad]) => ({ producto_id: id, cantidad }));
+  const items = [...carrito.entries()].map(([id, cantidad]) => ({
+    producto_id: id, cantidad,
+    ...(importesCarrito.has(id) ? { importe: importesCarrito.get(id) } : {}),
+  }));
   try {
-    const r = await post('/api/ventas', bodySucOperativa({ items, forma_pago: pago, cliente_id: clienteId, tipo }));
+    const r = await post('/api/ventas', bodySucOperativa({ items, forma_pago: pago, cliente_id: clienteId, tipo, pagos }));
     imprimirTicket(r.venta_id);
     carrito.clear();
+    importesCarrito.clear();
     pintarTicket();
     cargarComprobantes();
     cargarCaja();
@@ -1083,7 +1241,7 @@ async function imprimirTicket(ventaId, ventana = null, esReimpresion = false) {
       }
     }
     const lineas = v.detalles.map((d) => {
-      const importe = (d.precio || 0) * (d.cantidad || 0) - (d.descuento || 0);
+      const importe = (d.importe ?? (d.precio || 0) * (d.cantidad || 0)) - (d.descuento || 0);
       if (!fiscalCompleto) {
         return `<tr class="producto-ticket">
           <td><strong>${escapeHtml(d.nombre)}</strong><small>${cant(d.cantidad)} × ${fmtGs2(d.precio)}${d.unidad === 'kg' ? '/kg' : ''}</small></td>
@@ -1168,9 +1326,8 @@ async function imprimirTicket(ventaId, ventana = null, esReimpresion = false) {
       ${tabla}
       ${v.descuento > 0 ? `<div class="fp">Descuento: -${fmtGs2(v.descuento)}</div>` : ''}
       ${fiscalCompleto ? resumenIva : `<div class="tot">TOTAL: ${fmtGs2(v.total || 0)}</div>`}
-      <div class="fp">Forma de pago: <b>${escapeHtml(v.forma_pago)}</b></div>
+      <div class="fp">Forma de pago: <b>${escapeHtml(v.forma_pago === 'mixto' && v.pagos?.length ? `Combinado (${v.pagos.map((p) => `${p.forma_pago}: ${fmtGs2(p.monto)}`).join(' · ')})` : v.forma_pago)}</b></div>
       ${v.forma_pago === 'credito' ? `<div class="fp">Pagado: <b>${fmtGs2(v.pagado || 0)}</b> · Saldo: <b>${fmtGs2(Math.max(0, (v.total || 0) - (v.pagado || 0)))}</b></div>` : ''}
-      ${licenciaInfo && licenciaInfo.modo === 'prueba' ? '<div class="aviso">SISTEMA EN PRUEBA — SIN VALIDEZ FISCAL</div>' : ''}
       <div class="centro">${fiscalCompleto ? 'Documento impreso por el sistema de gestión.' : '¡Gracias por su compra!'}</div>
       <script>window.onload=function(){window.print()}<\/script>
     </body></html>`);
@@ -1297,14 +1454,17 @@ async function verDetalleVenta(id) {
       <td>${escapeHtml(d.nombre)}</td>
       <td class="right">${Number(d.cantidad).toLocaleString('es-PY', { maximumFractionDigits: 3 })}${d.unidad === 'kg' ? ' kg' : ''}</td>
       <td class="right">${fmtGs(d.precio)}</td>
-      <td class="right"><b>${fmtGs(Number(d.precio) * Number(d.cantidad) - Number(d.descuento || 0))}</b></td>
+      <td class="right"><b>${fmtGs(Number(d.importe ?? Number(d.precio) * Number(d.cantidad)) - Number(d.descuento || 0))}</b></td>
     </tr>`).join('');
+    const textoPago = v.forma_pago === 'mixto' && v.pagos?.length
+      ? `Combinado (${v.pagos.map((p) => `${p.forma_pago} ${fmtGs(p.monto)}`).join(' + ')})`
+      : v.forma_pago;
     abrirModal(`Detalle de ${v.tipo === 'factura' ? 'factura' : 'ticket'} N.º ${v.numero_comprobante}`, `
       <div class="venta-detalle-meta">
         <div><span>Fecha</span><b>${fmtFecha(v.fecha)}</b></div>
         <div><span>Cliente</span><b>${escapeHtml(labelCliente(v))}</b></div>
         <div><span>Sucursal</span><b>${escapeHtml(v.sucursal_nombre || '—')}</b></div>
-        <div><span>Pago</span><b>${escapeHtml(v.forma_pago)}</b></div>
+        <div><span>Pago</span><b>${escapeHtml(textoPago)}</b></div>
         <div><span>Estado</span><b>${v.anulada ? 'Anulada' : v.estado_pago === 'pendiente' ? 'Pendiente' : 'Pagada'}</b></div>
       </div>
       <div class="pos-table-wrap"><table class="venta-detalle-tabla">
@@ -1314,7 +1474,11 @@ async function verDetalleVenta(id) {
       ${v.descuento > 0 ? `<p class="venta-detalle-total">Descuento: −${fmtGs(v.descuento)}</p>` : ''}
       <p class="venta-detalle-total">Total: <b>${fmtGs(v.total)}</b></p>
       ${Number(v.saldo) > 0 ? `<p class="venta-detalle-total">Pagado: ${fmtGs(v.pagado)} · Saldo: <b>${fmtGs(v.saldo)}</b></p>` : ''}
-      ${v.anulada ? '<p class="msg err">Esta venta fue anulada.</p>' : ''}
+      ${v.anulada ? `
+        <div class="msg err" style="margin:12px 0;padding:10px;border-radius:8px">
+          <b>Venta anulada</b>${v.anulado_en ? ` el ${fmtFechaHora(v.anulado_en)}` : ''}${v.anulado_por_usuario ? ` por <b>${escapeHtml(v.anulado_por_usuario)}</b>` : ''}.
+          ${v.motivo_anulacion ? `<br><b>Motivo:</b> ${escapeHtml(v.motivo_anulacion)}` : ''}
+        </div>` : ''}
       <div class="actions venta-detalle-acciones">
         <button type="button" class="btn ghost" onclick="reimprimirVenta(${v.id})"><i data-lucide="printer"></i> Reimprimir</button>
         ${v.anulada ? '' : `<button type="button" class="btn danger" onclick="anularVenta(${v.id}, true)"><i data-lucide="ban"></i> Anular venta</button>`}
@@ -1332,25 +1496,43 @@ function reimprimirVenta(id) {
 }
 
 async function anularVenta(id, desdeControl = false) {
-  if (!await confirmarAccion({
-    titulo: 'Anular venta',
-    mensaje: 'Se devolverá el stock y se registrará el egreso correspondiente en caja si está abierta. Esta acción no se puede deshacer.',
-    aceptar: 'Anular venta',
-    peligro: true,
-  })) return;
-  try {
-    await post(`/api/ventas/${id}/anular`, {});
-    toast('Venta anulada. El stock fue devuelto.', 'warn');
-    if (desdeControl) {
+  abrirModal('Anular venta', `
+    <p class="msg err" style="background:var(--rojo-bg);padding:10px;border-radius:8px">
+      <b>Se devolverá el stock y se registrará el egreso correspondiente en caja si está abierta.</b><br>
+      Esta acción queda registrada en la auditoría del sistema.
+    </p>
+    <label style="margin-top:14px;display:block"><b>Motivo de la anulación:</b>
+      <select id="anul-motivo-sel" class="pos-select full" style="margin-top:6px" onchange="const otro=$('#anul-motivo-otro');if(this.value==='otro'){otro.style.display='block';otro.focus();}else{otro.style.display='none';}">
+        <option value="Error en comprobante / importe">Error en comprobante / importe</option>
+        <option value="Cliente desistió de la compra">Cliente desistió de la compra</option>
+        <option value="Comprobante duplicado">Comprobante duplicado</option>
+        <option value="Producto o peso equivocado">Producto o peso equivocado</option>
+        <option value="otro">Otro motivo (especificar)...</option>
+      </select>
+    </label>
+    <input id="anul-motivo-otro" placeholder="Escribí el motivo detallado..." style="display:none;margin-top:8px;width:100%">
+    <div class="actions" style="margin-top:16px;justify-content:space-between">
+      <button type="button" class="btn ghost" onclick="cerrarModal()">Cancelar</button>
+      <button type="button" class="btn danger" id="btn-confirmar-anulacion"><i data-lucide="ban"></i> Confirmar anulación</button>
+    </div>
+  `);
+  reicons();
+  $('#btn-confirmar-anulacion')?.addEventListener('click', async () => {
+    const sel = $('#anul-motivo-sel')?.value || '';
+    const otro = $('#anul-motivo-otro')?.value?.trim() || '';
+    const motivo = sel === 'otro' ? (otro || 'Otro motivo no especificado') : sel;
+    try {
+      await post(`/api/ventas/${id}/anular`, { motivo });
+      toast('Venta anulada. El stock fue devuelto.', 'warn');
       cerrarModal();
-      await cargarHistorialVentas();
+      if (desdeControl) await cargarHistorialVentas();
+      if ($('#tab-ventas').classList.contains('active')) cargarComprobantes();
+      cargarDashboard();
+      cargarCaja();
+    } catch (e) {
+      toast(e.message, 'err');
     }
-    if ($('#tab-ventas').classList.contains('active')) cargarComprobantes();
-    cargarDashboard();
-    cargarCaja();
-  } catch (e) {
-    toast(e.message, 'err');
-  }
+  });
 }
 
 // ── Modal helper ──────────────────────────────────────────
@@ -1367,8 +1549,11 @@ modal.addEventListener('click', (e) => { if (e.target === modal) cerrarModal(); 
 
 // ── Productos ─────────────────────────────────────────────
 function unidadLabel(u, n) {
-  if (u === 'kg') return Number(n).toFixed(2) + ' kg';
-  return Number(n).toLocaleString('es-PY') + (u === 'docena' ? ' doc' : ' und');
+  const cantidad = Number(n).toLocaleString('es-PY', {
+    minimumFractionDigits: 0, maximumFractionDigits: 3,
+  });
+  if (u === 'kg') return cantidad + ' kg';
+  return cantidad + (u === 'docena' ? ' doc' : ' und');
 }
 
 function pintarTablaProductos(lista) {
@@ -1381,13 +1566,24 @@ function pintarTablaProductos(lista) {
       <td>${p.codigo ? `<code>${escapeHtml(p.codigo)}</code>` : '<span class="muted">—</span>'}</td>
       <td><b>${escapeHtml(p.nombre)}</b></td><td>${escapeHtml(p.categoria)}</td>
       <td>${unidadLabel(p.unidad, p.stock)}</td>
-      <td><b>${fmtGs(p.precio_venta)}${p.unidad === 'kg' ? '/kg' : ''}</b></td>
+      <td><b>${fmtGs(p.precio_venta)}${p.unidad === 'kg' ? '/kg' : p.unidad === 'docena' ? '/doc' : ''}</b></td>
       <td><div class="actions">
+        ${esDueño ? `<button class="btn small ghost" onclick="costearProductoDirecto(${p.id})" title="Costear receta y fijar precio"><i data-lucide="calculator"></i> Costeo</button>` : ''}
         <button class="btn small ghost" onclick="abrirProductoModal(${p.id})"><i data-lucide="pencil"></i> Editar</button>
         <button class="btn small ghost" onclick="ajustarStockProducto(${p.id})"><i data-lucide="package-plus"></i> Ajustar stock</button>
         <button class="btn small danger" onclick="eliminarProducto(${p.id})"><i data-lucide="trash-2"></i></button>
       </div></td></tr>`).join('') + '</tbody>';
+  reicons();
 }
+
+window.costearProductoDirecto = (id) => {
+  irATab('recetas');
+  const sel = $('#receta-producto');
+  if (sel) {
+    sel.value = id;
+    cargarReceta();
+  }
+};
 
 async function cargarProductos() {
   $('#tabla-productos').innerHTML = spinnerHtml();
@@ -1492,29 +1688,41 @@ $('#btn-vender').addEventListener('click', () => {
   if (!carrito.size) return toast('No hay productos en el carrito', 'warn');
   const fp = $('#pos-forma-pago')?.value || 'efectivo';
   const tipo = $('#pos-tipo-comprobante')?.value || 'ticket';
-  const totalTxt = $('#pos-total-pagar')?.textContent || '₲ 0';
-  const total = Number(String(totalTxt).replace(/[^0-9]/g, ''));
+  const { total } = calcularTotalNumerico();
   if (tipo === 'factura' && !posClienteSel) return toast('Para emitir factura debe seleccionar un cliente', 'warn');
   if (fp === 'credito' && !posClienteSel) return toast('Debe seleccionar un cliente para venta a crédito', 'warn');
   if (fp === 'efectivo') {
     const recibido = Number($('#pos-recibido')?.value || 0);
     if (recibido < total) return toast('El monto recibido es menor al total', 'warn');
   }
-  cobrarBoutique(tipo, fp);
+  let pagos;
+  if (fp === 'mixto') {
+    pagos = Object.fromEntries(['efectivo', 'transferencia', 'tarjeta'].map((medio) => [
+      medio, Number($(`#pos-pago-${medio}`)?.value || 0),
+    ]));
+    const suma = Object.values(pagos).reduce((a, b) => a + b, 0);
+    if (Object.values(pagos).some((monto) => !Number.isFinite(monto) || monto < 0)) {
+      return toast('Ingresá importes válidos para cada medio de pago', 'warn');
+    }
+    if (Math.abs(suma - total) > 0.009) {
+      return toast('Los medios de pago deben sumar exactamente el total de la venta', 'warn');
+    }
+  }
+  cobrarBoutique(tipo, fp, pagos);
 });
 
 function calcularTotalNumerico() {
   let subtotal = 0;
   for (const [id, cant] of carrito) {
     const p = productosGlobal.find((x) => x.id === id);
-    if (p) subtotal += p.precio_venta * cant;
+    if (p) subtotal += importesCarrito.get(id) ?? p.precio_venta * cant;
   }
   const desc = Number($('#pos-descuento')?.value || 0);
   const total = Math.max(0, subtotal - desc);
   return { subtotal, descuento: desc, total };
 }
 
-async function cobrarBoutique(tipo, fp) {
+async function cobrarBoutique(tipo, fp, pagos) {
   const { subtotal, descuento, total } = calcularTotalNumerico();
   if (!carrito.size) return toast('No hay productos en el carrito', 'warn');
   if (tipo === 'factura' && !posClienteSel) return toast('Para emitir factura debe seleccionar un cliente', 'warn');
@@ -1523,22 +1731,33 @@ async function cobrarBoutique(tipo, fp) {
     const recibido = Number($('#pos-recibido')?.value || 0);
     if (recibido < total) return toast('El monto recibido es menor al total', 'warn');
   }
+  if (fp === 'mixto' && (!pagos || Math.abs(Object.values(pagos).reduce((a, b) => a + b, 0) - total) > 0.009)) {
+    return toast('Los medios de pago deben sumar exactamente el total de la venta', 'warn');
+  }
   const btn = $('#btn-vender');
   if (btn) { btn.disabled = true; btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;border-width:2px;margin:0 auto"></div>'; }
-  const items = [...carrito.entries()].map(([id, cantidad]) => ({ producto_id: id, cantidad }));
+  const items = [...carrito.entries()].map(([id, cantidad]) => ({
+    producto_id: id, cantidad,
+    ...(importesCarrito.has(id) ? { importe: importesCarrito.get(id) } : {}),
+  }));
   const recibido = Number($('#pos-recibido')?.value || 0);
   try {
     const r = await post('/api/ventas', bodySucOperativa({
       items, forma_pago: fp, cliente_id: posClienteSel ? posClienteSel.id : null, tipo,
-      descuento, abono: fp === 'credito' ? recibido : undefined
+      descuento, abono: fp === 'credito' ? recibido : undefined, pagos
     }));
     imprimirTicket(r.venta_id);
     carrito.clear();
+    importesCarrito.clear();
     try { localStorage.removeItem('panaderia_carrito'); } catch (_) {}
     posClienteSel = null;
     actualizarClientePOS();
     const rec = $('#pos-recibido');
     if (rec) rec.value = '';
+    ['efectivo', 'transferencia', 'tarjeta'].forEach((medio) => {
+      const input = $(`#pos-pago-${medio}`);
+      if (input) input.value = '';
+    });
     const desc = $('#pos-descuento');
     if (desc) desc.value = 0;
     pintarCarrito();
@@ -1579,13 +1798,17 @@ async function confirmarVentaBoutique(total, formaPago, tipo, clienteId) {
   const btns = $('#modal').querySelectorAll('.actions .btn');
   const btn = btns[btns.length - 1];
   if (btn) { btn.disabled = true; btn.innerHTML = '<div class="spinner" style="width:18px;height:18px;border-width:2px;margin:0 auto"></div>'; }
-  const items = [...carrito.entries()].map(([id, cantidad]) => ({ producto_id: id, cantidad }));
+  const items = [...carrito.entries()].map(([id, cantidad]) => ({
+    producto_id: id, cantidad,
+    ...(importesCarrito.has(id) ? { importe: importesCarrito.get(id) } : {}),
+  }));
   const recibido = Number($('#pos-recibido')?.value || 0);
   const desc = Number($('#pos-descuento')?.value || 0);
   try {
     const r = await post('/api/ventas', bodySucOperativa({ items, forma_pago: formaPago, cliente_id: clienteId, tipo, descuento: desc, abono: formaPago === 'credito' ? recibido : undefined }));
     imprimirTicket(r.venta_id);
     carrito.clear();
+    importesCarrito.clear();
     try { localStorage.removeItem('panaderia_carrito'); } catch (_) {}
     posClienteSel = null;
     actualizarClientePOS();
@@ -1737,12 +1960,305 @@ async function eliminarCliente(id) {
 }
 
 // ── Producción ────────────────────────────────────────────
+let insumosGlobal = [];
+let productoRecetaActual = null;
+
+function textoUnidadInsumo(unidad) {
+  return unidad === 'kg' ? 'kg' : unidad === 'l' ? 'litro' : 'unidad';
+}
+
+function opcionesUnidadReceta(unidadBase, elegida) {
+  const unidades = unidadBase === 'kg' ? ['g', 'kg']
+    : unidadBase === 'l' ? ['ml', 'l']
+      : unidadBase === 'unidad' ? ['unidad'] : [];
+  return unidades.map((unidad) => `<option value="${unidad}" ${unidad === elegida ? 'selected' : ''}>${unidad}</option>`).join('');
+}
+
+function actualizarUnidadesFilaReceta(fila, conservar = true) {
+  const insumo = insumosGlobal.find((item) => String(item.id) === fila.querySelector('.receta-insumo-select').value);
+  const selectUnidad = fila.querySelector('.receta-unidad-select');
+  const anterior = conservar ? selectUnidad.value : '';
+  selectUnidad.innerHTML = opcionesUnidadReceta(insumo ? insumo.unidad_base : '', anterior);
+  if (!selectUnidad.value && insumo) selectUnidad.value = insumo.unidad_base === 'kg' ? 'g' : insumo.unidad_base === 'l' ? 'ml' : 'unidad';
+}
+
+function agregarFilaReceta(linea = {}) {
+  const contenedor = $('#receta-insumos');
+  const fila = document.createElement('div');
+  fila.className = 'receta-insumo-fila';
+  fila.innerHTML = `
+    <div class="campo-insumo">
+      <label>Insumo
+        <select class="receta-insumo-select">
+          <option value="">Elegí un insumo</option>
+          ${insumosGlobal.map((i) => `<option value="${i.id}">${escapeHtml(i.nombre)} (${textoUnidadInsumo(i.unidad_base)})</option>`).join('')}
+        </select>
+      </label>
+    </div>
+    <div class="campo-cantidad">
+      <label>Cantidad
+        <input type="number" class="receta-cantidad" min="0.001" step="0.001" placeholder="Ej: 2.5" value="${linea.cantidad ?? ''}">
+      </label>
+    </div>
+    <div class="campo-unidad">
+      <label>Unidad
+        <select class="receta-unidad-select"></select>
+      </label>
+    </div>
+    <div class="campo-quitar">
+      <button type="button" class="receta-quitar-insumo" title="Eliminar este ingrediente" aria-label="Eliminar ingrediente">
+        <i data-lucide="trash-2"></i>
+      </button>
+    </div>`;
+  contenedor.appendChild(fila);
+  fila.querySelector('.receta-insumo-select').value = linea.insumo_id ? String(linea.insumo_id) : '';
+  fila.querySelector('.receta-insumo-select').addEventListener('change', () => actualizarUnidadesFilaReceta(fila, false));
+  fila.querySelector('.receta-quitar-insumo').addEventListener('click', () => fila.remove());
+  actualizarUnidadesFilaReceta(fila, false);
+  if (linea.unidad) fila.querySelector('.receta-unidad-select').value = linea.unidad;
+  reicons();
+}
+
+function actualizarOpcionesFilasReceta() {
+  $$('#receta-insumos .receta-insumo-fila').forEach((fila) => {
+    const select = fila.querySelector('.receta-insumo-select');
+    const anterior = select.value;
+    select.innerHTML = `<option value="">Elegí un insumo</option>${insumosGlobal.map((i) => `<option value="${i.id}">${escapeHtml(i.nombre)} (${textoUnidadInsumo(i.unidad_base)})</option>`).join('')}`;
+    select.value = anterior;
+    actualizarUnidadesFilaReceta(fila);
+  });
+}
+
+function pintarTablaInsumos() {
+  const tabla = $('#tabla-insumos');
+  if (!insumosGlobal.length) {
+    tabla.innerHTML = '<thead><tr><th>Insumo</th><th>Unidad base</th><th>Costo</th><th>Acciones</th></tr></thead><tbody>' +
+      emptyStateHtml('wheat', 'Todavía no hay insumos', 'Agregá materias primas para calcular las fórmulas') + '</tbody>';
+    return;
+  }
+  tabla.innerHTML = '<thead><tr><th>Insumo</th><th>Unidad base</th><th>Costo por unidad</th><th>Acciones</th></tr></thead><tbody>' +
+    insumosGlobal.map((i) => `<tr>
+      <td><b>${escapeHtml(i.nombre)}</b></td><td>${textoUnidadInsumo(i.unidad_base)}</td>
+      <td>${fmtGs2(i.costo_unitario)} / ${i.unidad_base}</td>
+      <td><button type="button" class="btn small ghost editar-insumo" data-id="${i.id}"><i data-lucide="pencil"></i> Editar</button></td>
+    </tr>`).join('') + '</tbody>';
+  tabla.querySelectorAll('.editar-insumo').forEach((boton) => {
+    boton.addEventListener('click', () => abrirInsumoModal(Number(boton.dataset.id)));
+  });
+  if (window.lucide) lucide.createIcons();
+}
+
+async function cargarInsumos() {
+  insumosGlobal = await api('/api/insumos');
+  pintarTablaInsumos();
+  actualizarOpcionesFilasReceta();
+}
+
+function abrirInsumoModal(id = null) {
+  const insumo = insumosGlobal.find((i) => Number(i.id) === id);
+  abrirModal(id ? `Editar insumo: ${insumo.nombre}` : 'Nuevo insumo', `
+    <label>Nombre
+      <input id="insumo-nombre" maxlength="100" value="${escapeHtml(insumo ? insumo.nombre : '')}">
+    </label>
+    ${id ? `<p class="muted">Unidad base: <b>${textoUnidadInsumo(insumo.unidad_base)}</b> (no se puede cambiar después de crear el insumo).</p>` : `
+    <label>Unidad base
+      <select id="insumo-unidad">
+        <option value="kg">Kilogramo (kg)</option>
+        <option value="l">Litro (L)</option>
+        <option value="unidad">Unidad</option>
+      </select>
+    </label>`}
+    <label>Costo por ${id ? insumo.unidad_base : '<span id="insumo-unidad-costo">kg</span>'} (₲)
+      <input type="number" id="insumo-costo" min="0" step="any" value="${insumo ? insumo.costo_unitario : ''}">
+    </label>
+    <p class="msg" id="insumo-msg"></p>
+    <button type="button" class="btn" style="width:100%;margin-top:16px" id="btn-guardar-insumo">Guardar insumo</button>`);
+  if (!id) {
+    $('#insumo-unidad').addEventListener('change', () => {
+      $('#insumo-unidad-costo').textContent = $('#insumo-unidad').value;
+    });
+  }
+  $('#btn-guardar-insumo').addEventListener('click', () => guardarInsumo(id));
+}
+
+async function guardarInsumo(id) {
+  const mensaje = $('#insumo-msg');
+  mensaje.textContent = '';
+  const datos = {
+    nombre: $('#insumo-nombre').value,
+    costo_unitario: $('#insumo-costo').value,
+  };
+  if (!id) datos.unidad_base = $('#insumo-unidad').value;
+  try {
+    if (id) await put(`/api/insumos/${id}`, datos);
+    else await post('/api/insumos', datos);
+    modal.classList.add('hidden');
+    toast(id ? 'Insumo actualizado' : 'Insumo creado', 'ok');
+    await cargarInsumos();
+  } catch (e) {
+    msg(mensaje, escapeHtml(e.message), 'err');
+  }
+}
+
+function pintarCosteoReceta(costeo) {
+  const contenedor = $('#receta-costeo');
+  if (!costeo) {
+    contenedor.innerHTML = '';
+    return;
+  }
+  const producto = productosGlobal.find((p) => Number(p.id) === productoRecetaActual);
+  const u = producto ? producto.unidad : 'unidad';
+  const uLabel = u === 'kg' ? 'kilo' : u === 'docena' ? 'docena' : 'unidad';
+  const precioActual = producto ? producto.precio_venta : 0;
+
+  let desgloseDocena = '';
+  if (u === 'docena') {
+    const costoUnit = costeo.costo_unitario / 12;
+    const sugeridoUnit = costeo.precio_sugerido / 12;
+    desgloseDocena = `<p class="muted" style="margin-top:6px;font-size:.9em">
+      Equivale por unidad suelta a: <b>Costo ${fmtGs(costoUnit)}</b> · <b>Venta sugerida ${fmtGs(sugeridoUnit)}</b>
+    </p>`;
+  }
+
+  contenedor.innerHTML = `
+    <div class="cards" style="margin-bottom:12px">
+      <div class="card"><div class="valor">${fmtGs(costeo.costo_lote)}</div><div class="etiqueta">Costo de la tanda</div></div>
+      <div class="card"><div class="valor">${fmtGs(costeo.costo_unitario)}</div><div class="etiqueta">Costo por ${uLabel}</div></div>
+      <div class="card"><div class="valor">${fmtGs(precioActual)}</div><div class="etiqueta">Precio actual en venta</div></div>
+      <div class="card ambar"><div class="valor">${fmtGs(costeo.precio_sugerido)}</div><div class="etiqueta">Sugerido (${costeo.margen}% margen)</div></div>
+    </div>
+    ${desgloseDocena}
+    <div style="margin:14px 0">
+      <button type="button" class="btn" id="btn-aplicar-precio" style="width:100%;font-size:1.02em;padding:11px">
+        <i data-lucide="check"></i> Fijar ${fmtGs(costeo.precio_sugerido)} como precio de venta por ${uLabel}
+      </button>
+    </div>
+    <p class="muted" style="margin-top:10px">Rendimiento: <b>${costeo.rendimiento} ${uLabel}${costeo.rendimiento > 1 && u !== 'kg' ? 's' : ''}</b></p>
+    <details style="margin-top:8px">
+      <summary class="muted" style="cursor:pointer;font-weight:600">Ver desglose de ingredientes usados</summary>
+      <table style="margin-top:8px"><thead><tr><th>Insumo</th><th>Cantidad</th><th>Costo</th></tr></thead><tbody>
+        ${costeo.insumos.map((i) => `<tr><td>${escapeHtml(i.nombre)}</td><td>${i.cantidad} ${i.unidad}</td><td>${fmtGs(i.costo)}</td></tr>`).join('')}
+      </tbody></table>
+    </details>`;
+  reicons();
+  $('#btn-aplicar-precio').addEventListener('click', aplicarPrecioReceta);
+}
+
+async function cargarReceta() {
+  const mensaje = $('#receta-msg');
+  mensaje.textContent = '';
+  $('#receta-costeo').innerHTML = '';
+  productoRecetaActual = Number($('#receta-producto').value);
+  if (!productoRecetaActual) {
+    $('#receta-editor').classList.add('hidden');
+    return;
+  }
+  const producto = productosGlobal.find((p) => Number(p.id) === productoRecetaActual);
+  const uLabel = $('#receta-rendimiento-label');
+  const uHelp = $('#receta-rendimiento-help');
+  const uInfo = $('#receta-producto-info');
+  if (producto) {
+    if (producto.unidad === 'kg') {
+      if (uLabel) uLabel.textContent = 'Rendimiento en kilos (kg)';
+      if (uHelp) uHelp.textContent = 'Kilos de producto obtenidos de esta tanda.';
+      if (uInfo) uInfo.innerHTML = `Venta por <b>KILO</b> · Precio actual en mostrador: <b>${fmtGs(producto.precio_venta)}/kg</b>`;
+    } else if (producto.unidad === 'docena') {
+      if (uLabel) uLabel.textContent = 'Rendimiento en docenas';
+      if (uHelp) uHelp.textContent = 'Docenas de producto obtenidas de esta tanda.';
+      if (uInfo) uInfo.innerHTML = `Venta por <b>DOCENA</b> · Precio actual en mostrador: <b>${fmtGs(producto.precio_venta)}/docena</b>`;
+    } else {
+      if (uLabel) uLabel.textContent = 'Rendimiento en unidades';
+      if (uHelp) uHelp.textContent = 'Cantidad de unidades obtenidas de esta tanda.';
+      if (uInfo) uInfo.innerHTML = `Venta por <b>UNIDAD</b> · Precio actual en mostrador: <b>${fmtGs(producto.precio_venta)} c/u</b>`;
+    }
+  }
+  try {
+    const datos = await api(`/api/recetas/${productoRecetaActual}`);
+    $('#receta-editor').classList.remove('hidden');
+    $('#receta-rendimiento').value = datos.receta ? datos.receta.rendimiento : '';
+    $('#receta-margen').value = datos.receta ? datos.receta.margen : 40;
+    $('#receta-insumos').innerHTML = '';
+    if (datos.insumos.length) datos.insumos.forEach(agregarFilaReceta);
+    else agregarFilaReceta();
+    pintarCosteoReceta(datos.costo);
+  } catch (e) {
+    msg(mensaje, escapeHtml(e.message), 'err');
+  }
+}
+
+async function guardarReceta() {
+  const mensaje = $('#receta-msg');
+  mensaje.textContent = '';
+  const filas = $$('#receta-insumos .receta-insumo-fila');
+  const datos = {
+    rendimiento: Number($('#receta-rendimiento').value),
+    margen: $('#receta-margen').value,
+    insumos: filas.map((fila) => ({
+      insumo_id: Number(fila.querySelector('.receta-insumo-select').value),
+      cantidad: Number(fila.querySelector('.receta-cantidad').value),
+      unidad: fila.querySelector('.receta-unidad-select').value,
+    })),
+  };
+  try {
+    const costeo = await put(`/api/recetas/${productoRecetaActual}`, datos);
+    pintarCosteoReceta(costeo);
+    msg(mensaje, 'Fórmula guardada y costo calculado. Tocá "Fijar precio" para aplicarlo al mostrador.', 'ok');
+    toast('Fórmula guardada', 'ok');
+  } catch (e) {
+    msg(mensaje, escapeHtml(e.message), 'err');
+  }
+}
+
+async function aplicarPrecioReceta() {
+  const producto = productosGlobal.find((p) => Number(p.id) === productoRecetaActual);
+  if (!producto) return;
+  const u = producto.unidad === 'kg' ? 'kg' : producto.unidad === 'docena' ? 'docena' : 'unidad';
+  if (!await confirmarAccion({
+    titulo: 'Fijar precio de venta',
+    mensaje: `¿Querés cambiar el precio de venta de "${producto.nombre}" al precio sugerido? Este será el nuevo precio en el mostrador.`,
+    aceptar: 'Fijar precio',
+  })) return;
+  try {
+    const resultado = await post(`/api/recetas/${productoRecetaActual}/aplicar-precio`, {});
+    producto.precio_venta = resultado.precio_sugerido;
+    toast(`Precio de venta fijado en ${fmtGs(resultado.precio_sugerido)}/${u}`, 'ok');
+    pintarCosteoReceta(resultado);
+    cargarRecetasTab();
+  } catch (e) {
+    toast(e.message, 'err');
+  }
+}
+
+async function cargarRecetasTab() {
+  if (!esDueño) return;
+  productosGlobal = await api('/api/productos');
+  const sel = $('#receta-producto');
+  if (sel) {
+    const anterior = productoRecetaActual || sel.value;
+    sel.innerHTML = '<option value="">-- Seleccioná un producto para costear --</option>' +
+      productosGlobal.map((p) => {
+        const u = p.unidad === 'kg' ? 'Kilo' : p.unidad === 'docena' ? 'Docena' : 'Unidad';
+        return `<option value="${p.id}">${escapeHtml(p.nombre)} (${u} · Actual: ${fmtGs(p.precio_venta)})</option>`;
+      }).join('');
+    if (anterior && productosGlobal.some((p) => String(p.id) === String(anterior))) {
+      sel.value = anterior;
+    }
+  }
+  await cargarInsumos();
+  if (sel && sel.value) {
+    cargarReceta();
+  } else {
+    $('#receta-editor')?.classList.add('hidden');
+  }
+}
+
 async function cargarProduccion() {
+  if (!$('#tabla-lotes')) return;
   $('#tabla-lotes').innerHTML = spinnerHtml();
   productosGlobal = await api('/api/productos');
   const sel = $('#select-prod');
-  sel.innerHTML = productosGlobal.map((p) => `<option value="${p.id}">${escapeHtml(p.nombre)} (${unidadLabel(p.unidad, p.stock)} en stock)</option>`).join('');
-  $('#prod-cantidad').value = '';
+  if (sel) sel.innerHTML = productosGlobal.map((p) => `<option value="${p.id}">${escapeHtml(p.nombre)} (${unidadLabel(p.unidad, p.stock)} en stock)</option>`).join('');
+  if ($('#prod-cantidad')) $('#prod-cantidad').value = '';
   const lotes = await api(withSucOperativa('/api/lotes'));
   if (!lotes.length) {
     $('#tabla-lotes').innerHTML = '<thead><tr><th>#</th><th>Producto</th><th>Cantidad</th><th>Fecha</th><th>Sucursal</th></tr></thead><tbody>' + emptyStateHtml('chef-hat', 'Sin producción registrada', 'Registrá tu primera producción') + '</tbody>';
@@ -1752,7 +2268,18 @@ async function cargarProduccion() {
     lotes.map((l) => `<tr><td>${l.id}</td><td>${escapeHtml(l.producto_nombre)}</td><td><b>${unidadLabel(l.producto_unidad, l.cantidad)}</b></td><td>${fmtFecha(l.fecha)}</td><td class="muted">${l.sucursal_nombre || '—'}</td></tr>`).join('') + '</tbody>';
 }
 
-$('#btn-producir').addEventListener('click', async () => {
+$('#btn-nuevo-insumo')?.addEventListener('click', () => abrirInsumoModal());
+$('#btn-editar-receta')?.addEventListener('click', cargarReceta);
+$('#btn-agregar-ingrediente')?.addEventListener('click', () => agregarFilaReceta());
+$('#btn-guardar-receta')?.addEventListener('click', guardarReceta);
+$('#receta-producto')?.addEventListener('change', () => {
+  if ($('#receta-producto').value) cargarReceta();
+  else {
+    productoRecetaActual = null;
+    $('#receta-editor')?.classList.add('hidden');
+  }
+});
+$('#btn-producir')?.addEventListener('click', async () => {
   const btn = $('#btn-producir');
   btn.disabled = true;
   try {
@@ -1772,12 +2299,132 @@ $('#btn-producir').addEventListener('click', async () => {
 
 // ── Reportes ──────────────────────────────────────────────
 let repFecha = fechaHoy();
+let repRangoDesde = '';
+let repRangoHasta = '';
 async function cargarReportes() {
   repFecha = fechaHoy();
   $('#rep-fecha').value = repFecha;
+  const inicioMes = `${repFecha.slice(0, 8)}01`;
+  const minimo = licenciaInfo && licenciaInfo.limite_reporte ? licenciaInfo.limite_reporte.desde : '';
+  repRangoDesde = minimo && inicioMes < minimo ? minimo : inicioMes;
+  repRangoHasta = repFecha;
+  $('#rep-rango-desde').value = repRangoDesde;
+  $('#rep-rango-hasta').value = repRangoHasta;
+  $('#rep-rango-desde').min = minimo;
+  $('#rep-rango-hasta').min = minimo;
+  $('#rep-rango-hasta').max = repFecha;
   pintarReporte();
 }
 $('#rep-fecha').addEventListener('change', (e) => { repFecha = e.target.value; pintarReporte(); });
+
+$$('#rep-vistas button').forEach((boton) => boton.addEventListener('click', () => {
+  const rango = boton.dataset.reporte === 'rango';
+  $$('#rep-vistas button').forEach((item) => item.classList.toggle('activo', item === boton));
+  $('#rep-dia-vista').classList.toggle('hidden', rango);
+  $('#rep-rango-vista').classList.toggle('hidden', !rango);
+  if (rango) pintarReporteRango();
+}));
+
+$('#rep-rango-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  repRangoDesde = $('#rep-rango-desde').value;
+  repRangoHasta = $('#rep-rango-hasta').value;
+  pintarReporteRango();
+});
+
+function pintarTablaReporteRango(id, encabezados, filas, vacio) {
+  const head = `<thead><tr>${encabezados.map((titulo) => `<th>${titulo}</th>`).join('')}</tr></thead>`;
+  const body = filas.length ? filas.join('') : `<tbody>${emptyStateHtml('file-search', vacio)}</tbody>`;
+  $(`#${id}`).innerHTML = filas.length ? `${head}<tbody>${body}</tbody>` : `${head}${body}`;
+}
+
+function limpiarTablasReporteRango() {
+  [
+    'rep-rango-ventas', 'rep-rango-pagos', 'rep-rango-productos-total',
+    'rep-rango-productos-dia', 'rep-rango-produccion',
+    'rep-rango-gastos-categoria', 'rep-rango-gastos', 'rep-rango-cajas',
+  ].forEach((id) => { $(`#${id}`).innerHTML = ''; });
+}
+
+async function pintarReporteRango() {
+  const boton = $('#rep-rango-form button[type="submit"]');
+  const msgReporte = $('#rep-rango-msg');
+  msgReporte.textContent = '';
+  limpiarTablasReporteRango();
+  $('#rep-rango-cards').innerHTML = spinnerHtml();
+  if (!repRangoDesde || !repRangoHasta || repRangoDesde > repRangoHasta) {
+    $('#rep-rango-cards').innerHTML = '';
+    msg(msgReporte, 'Elegí un rango de fechas válido.', 'err');
+    return;
+  }
+  if (boton) boton.disabled = true;
+  const query = `desde=${encodeURIComponent(repRangoDesde)}&hasta=${encodeURIComponent(repRangoHasta)}`;
+  try {
+    const reporte = await api(withSucReporte(`/api/reporte/rango?${query}`));
+    if (reporte.limitado) {
+      $('#rep-rango-cards').innerHTML = '';
+      msg(msgReporte, escapeHtml(reporte.mensaje), 'err');
+      reicons();
+      return;
+    }
+
+    $('#rep-rango-cards').innerHTML = `
+      <div class="card"><div class="valor">${fmtGs(reporte.total_ventas)}</div><div class="etiqueta">Ventas del período</div></div>
+      <div class="card"><div class="valor">${reporte.cantidad_ventas}</div><div class="etiqueta">Comprobantes</div></div>
+      <div class="card"><div class="valor">${reporte.ventas_por_dia.length}</div><div class="etiqueta">Días con ventas</div></div>
+      <div class="card"><div class="valor">${reporte.productos_total.length}</div><div class="etiqueta">Productos vendidos</div></div>`;
+
+    pintarTablaReporteRango('rep-rango-ventas', ['Fecha', 'Comprobantes', 'Total vendido'],
+      reporte.ventas_por_dia.map((dia) => `<tr><td>${fmtFecha(dia.fecha)}</td><td>${dia.comprobantes}</td><td>${fmtGs(dia.total)}</td></tr>`),
+      'Sin ventas en este período');
+
+    const etiquetasPago = {
+      efectivo: 'Efectivo (incluye abonos)',
+      transferencia: 'Transferencia',
+      tarjeta: 'Tarjeta',
+      credito: 'Crédito',
+    };
+    pintarTablaReporteRango('rep-rango-pagos', ['Medio', 'Recaudado'],
+      reporte.pagos_total.map((pago) => `<tr><td>${etiquetasPago[pago.forma_pago] || escapeHtml(pago.forma_pago)}</td><td>${fmtGs(pago.total)}</td></tr>`),
+      'Sin cobros registrados');
+
+    pintarTablaReporteRango('rep-rango-productos-total', ['Producto', 'Cantidad', 'Importe vendido'],
+      reporte.productos_total.map((producto) => `<tr><td>${escapeHtml(producto.nombre)}</td><td>${unidadLabel(producto.unidad, producto.cantidad)}</td><td>${fmtGs(producto.total)}</td></tr>`),
+      'Sin productos vendidos');
+
+    pintarTablaReporteRango('rep-rango-productos-dia', ['Fecha', 'Producto', 'Cantidad', 'Importe vendido'],
+      reporte.productos_por_dia.map((producto) => `<tr><td>${fmtFecha(producto.fecha)}</td><td>${escapeHtml(producto.nombre)}</td><td>${unidadLabel(producto.unidad, producto.cantidad)}</td><td>${fmtGs(producto.total)}</td></tr>`),
+      'Sin detalle de productos');
+
+    pintarTablaReporteRango('rep-rango-produccion', ['Fecha', 'Producto', 'Cantidad producida'],
+      reporte.produccion_por_dia.map((lote) => `<tr><td>${fmtFecha(lote.fecha)}</td><td>${escapeHtml(lote.nombre)}</td><td>${unidadLabel(lote.unidad, lote.cantidad)}</td></tr>`),
+      'Sin producción registrada');
+
+    pintarTablaReporteRango('rep-rango-gastos-categoria', ['Categoría', 'Total'],
+      reporte.gastos_por_categoria.map((gasto) => `<tr><td>${escapeHtml(gasto.categoria)}</td><td>${fmtGs(gasto.total)}</td></tr>`),
+      'Sin gastos registrados');
+
+    pintarTablaReporteRango('rep-rango-gastos', ['Fecha', 'Total de gastos'],
+      reporte.gastos_por_dia.map((gasto) => `<tr><td>${fmtFecha(gasto.fecha)}</td><td>${fmtGs(gasto.total)}</td></tr>`),
+      'Sin gastos registrados');
+
+    pintarTablaReporteRango('rep-rango-cajas', ['Fecha', 'Apertura', 'Esperado', 'Real', 'Diferencia', 'Estado'],
+      reporte.cajas_por_dia.map((caja) => `<tr>
+        <td>${fmtFecha(caja.fecha)}</td><td>${fmtGs(caja.apertura)}</td>
+        <td>${fmtGs(caja.esperado)}</td><td>${caja.real == null ? '—' : fmtGs(caja.real)}</td>
+        <td>${caja.diferencia == null ? '—' : fmtGs(caja.diferencia)}</td>
+        <td>${caja.estado === 'cerrada' ? '<span class="tag ticket">Cerrada</span>' : '<span class="tag ok">Abierta</span>'}</td>
+      </tr>`),
+      'Sin cajas registradas');
+    reicons();
+  } catch (e) {
+    $('#rep-rango-cards').innerHTML = '';
+    limpiarTablasReporteRango();
+    msg(msgReporte, escapeHtml(e.message), 'err');
+  } finally {
+    if (boton) boton.disabled = false;
+  }
+}
 
 async function pintarReporte() {
   $('#rep-cards').innerHTML = spinnerHtml();
@@ -1821,6 +2468,39 @@ async function pintarReporte() {
 // ── Caja ──────────────────────────────────────────────────
 // Cajas viejas que quedaron abiertas: se muestran siempre (no solo un aviso
 // pasajero) para poder cerrarlas con el dinero contado de ese día.
+const denominacionesGs = [100000, 50000, 20000, 10000, 5000, 2000, 1000, 500, 100, 50];
+
+function htmlArqueoCaja(prefijo) {
+  const campos = denominacionesGs.map((denominacion) => `
+    <label>₲ ${denominacion.toLocaleString('es-PY')}
+      <input type="number" min="0" step="1" id="${prefijo}-${denominacion}" value="0">
+    </label>`).join('');
+  return `<div class="denominaciones-grid">${campos}</div>
+    <p class="muted" id="${prefijo}-resumen"></p>`;
+}
+
+function leerArqueoCaja(prefijo) {
+  return Object.fromEntries(denominacionesGs.map((denominacion) => [
+    denominacion, Number($(`#${prefijo}-${denominacion}`)?.value || 0),
+  ]));
+}
+
+function conectarArqueoCaja(prefijo, esperado) {
+  const actualizar = () => {
+    const conteo = leerArqueoCaja(prefijo);
+    const total = denominacionesGs.reduce((suma, denominacion) => suma + denominacion * conteo[denominacion], 0);
+    const diferencia = total - esperado;
+    const resumen = $(`#${prefijo}-resumen`);
+    if (resumen) resumen.textContent = `Contado: ${fmtGs(total)} · ${
+      diferencia === 0 ? 'Sin diferencia' : `${diferencia > 0 ? 'Sobra' : 'Falta'} ${fmtGs(Math.abs(diferencia))}`
+    }`;
+  };
+  denominacionesGs.forEach((denominacion) => {
+    $(`#${prefijo}-${denominacion}`)?.addEventListener('input', actualizar);
+  });
+  actualizar();
+}
+
 function pintarCajasPendientes(lista) {
   const cont = $('#caja-pendientes');
   if (!cont) return;
@@ -1831,6 +2511,8 @@ function pintarCajasPendientes(lista) {
       <td><b>${fmtFecha(c.fecha)}</b></td>
       <td>${fmtGs(c.apertura)}</td>
       <td style="color:var(--verde)">${fmtGs(c.ingresos)}</td>
+      <td>${fmtGs(c.transferencias || 0)}</td>
+      <td>${fmtGs(c.tarjetas || 0)}</td>
       <td style="color:var(--rojo)">${fmtGs(c.egresos)}</td>
       <td><b>${fmtGs(esperado)}</b></td>
       <td><div class="actions"><button class="btn small" onclick="verCaja(${c.id})"><i data-lucide="lock"></i> Cerrar</button></div></td>
@@ -1839,7 +2521,7 @@ function pintarCajasPendientes(lista) {
   cont.innerHTML = `<div class="box" style="border-color:var(--ambar)">
     <h3><i data-lucide="alert-triangle" style="width:15px;height:15px;vertical-align:-2px;color:var(--ambar)"></i> Cajas de días anteriores sin cerrar</h3>
     <p class="muted" style="margin-bottom:10px">Si un día no se cerró la caja, queda abierta y su cierre real nunca queda registrado. Cerrala con el dinero contado de ese día: las ventas y los movimientos no se modifican.</p>
-    <table><thead><tr><th>Fecha</th><th>Apertura</th><th>Ingresos</th><th>Egresos</th><th>Esperado</th><th></th></tr></thead><tbody>${filas}</tbody></table>
+    <table><thead><tr><th>Fecha</th><th>Apertura</th><th>Efectivo</th><th>Transferencia</th><th>Tarjeta</th><th>Egresos</th><th>Esperado</th><th></th></tr></thead><tbody>${filas}</tbody></table>
   </div>`;
   reicons();
 }
@@ -1858,10 +2540,13 @@ async function cargarCaja() {
   } else {
     $('#caja-abrir').classList.add('hidden');
     $('#caja-info').classList.remove('hidden');
-    const esperado = caja.apertura + caja.total_ingresos - caja.total_egresos;
+    const efectivo = caja.total_efectivo ?? caja.total_ingresos;
+    const esperado = caja.apertura + efectivo - caja.total_egresos;
     $('#caja-cards').innerHTML = `
       <div class="card"><div class="valor">${fmtGs(caja.apertura)}</div><div class="etiqueta">Apertura</div></div>
-      <div class="card positivo"><div class="valor">${fmtGs(caja.total_ingresos)}</div><div class="etiqueta">Ingresos</div></div>
+      <div class="card positivo"><div class="valor">${fmtGs(efectivo)}</div><div class="etiqueta">Efectivo</div></div>
+      <div class="card"><div class="valor">${fmtGs(caja.total_transferencia || 0)}</div><div class="etiqueta">Transferencias</div></div>
+      <div class="card"><div class="valor">${fmtGs(caja.total_tarjeta || 0)}</div><div class="etiqueta">Tarjetas</div></div>
       <div class="card negativo"><div class="valor">${fmtGs(caja.total_egresos)}</div><div class="etiqueta">Egresos</div></div>
       <div class="card ${caja.estado === 'abierta' ? 'ambar' : ''}"><div class="valor">${fmtGs(esperado)}</div><div class="etiqueta">${caja.estado === 'abierta' ? 'Esperado en caja' : 'Cierre esperado'}</div></div>`;
 
@@ -1874,15 +2559,10 @@ async function cargarCaja() {
 
     $('#caja-controles').innerHTML = caja.estado === 'abierta' ? `
       <div class="box">
-        <h3>Registrar egreso</h3>
-        <label>Concepto<input type="text" id="egreso-concepto" placeholder="Ej: compra de harina"></label>
-        <label>Monto<input type="number" id="egreso-monto"></label>
-        <button class="btn" id="btn-egreso"><i data-lucide="minus-circle"></i> Registrar egreso</button>
-        <hr>
         <h3>Cerrar caja</h3>
         <p class="muted" style="margin-bottom:8px">Esperado: <b>${fmtGs(esperado)}</b></p>
-        <label>Dinero contado en caja<input type="number" id="cierre-real" placeholder="0"></label>
-        <p class="msg" id="cierre-diff"></p>
+        <p class="muted">Contá los billetes y monedas; el total y la diferencia se calculan automáticamente.</p>
+        ${htmlArqueoCaja('cierre-denom')}
         <button class="btn" id="btn-cerrar-caja"><i data-lucide="lock"></i> Cerrar caja</button>
         <p class="msg" id="cierre-msg"></p>
       </div>` : `
@@ -1891,6 +2571,7 @@ async function cargarCaja() {
         <p class="muted" style="margin-bottom:8px">
           Cierre esperado: <b>${fmtGs(caja.cierre_esperado)}</b><br>
           Cierre real: <b>${fmtGs(caja.cierre_real)}</b><br>
+          Transferencias: <b>${fmtGs(caja.total_transferencia || 0)}</b> · Tarjetas: <b>${fmtGs(caja.total_tarjeta || 0)}</b><br>
           Diferencia: <b class="${caja.diferencia < 0 ? 'msg err' : ''}">${fmtGs(caja.diferencia)}</b>
         </p>
         <div class="actions" style="margin-top:12px">
@@ -1900,20 +2581,10 @@ async function cargarCaja() {
       </div>`;
 
     if (caja.estado === 'abierta') {
-      $('#btn-egreso').addEventListener('click', async () => {
-        try {
-          await post('/api/caja/egreso', bodySucOperativa({ concepto: $('#egreso-concepto').value, monto: parseFloat($('#egreso-monto').value) }));
-          toast('Egreso registrado', 'ok');
-          cargarCaja();
-        } catch (e) { toast(e.message, 'err'); }
-      });
-      $('#cierre-real').addEventListener('input', () => {
-        const real = parseFloat($('#cierre-real').value);
-        $('#cierre-diff').innerHTML = Number.isFinite(real) ? (real - esperado >= 0 ? 'Diferencia: +' : 'Diferencia: ') + fmtGs((real - esperado)) : '';
-      });
+      conectarArqueoCaja('cierre-denom', esperado);
       $('#btn-cerrar-caja').addEventListener('click', async () => {
         try {
-          const r = await post('/api/caja/cerrar', bodySucOperativa({ cierre_real: parseFloat($('#cierre-real').value) }));
+          const r = await post('/api/caja/cerrar', bodySucOperativa({ denominaciones: leerArqueoCaja('cierre-denom') }));
           toast(`Caja cerrada. Diferencia: ${fmtGs(r.diferencia)}`, r.diferencia < 0 ? 'warn' : 'ok');
           msg($('#cierre-msg'), `Caja cerrada. Esperado: ${fmtGs(r.esperado)} — Diferencia: ${fmtGs(r.diferencia)}`);
           cargarCaja();
@@ -1947,10 +2618,10 @@ $$('#caja-seg button').forEach((b) => b.addEventListener('click', () => {
 
 function pintarHistorialCajas(lista) {
   if (!lista.length) {
-    $('#tabla-historial-cajas').innerHTML = '<thead><tr><th>Fecha</th><th>Sucursal</th><th>Apertura</th><th>Ingresos</th><th>Egresos</th><th>Esperado</th><th>Real</th><th>Diferencia</th><th>Estado</th><th></th></tr></thead><tbody>' + emptyStateHtml('wallet', 'Sin cajas registradas') + '</tbody>';
+    $('#tabla-historial-cajas').innerHTML = '<thead><tr><th>Fecha</th><th>Sucursal</th><th>Apertura</th><th>Efectivo</th><th>Transferencia</th><th>Tarjeta</th><th>Egresos</th><th>Esperado</th><th>Real</th><th>Diferencia</th><th>Estado</th><th></th></tr></thead><tbody>' + emptyStateHtml('wallet', 'Sin cajas registradas') + '</tbody>';
     return;
   }
-  $('#tabla-historial-cajas').innerHTML = '<thead><tr><th>Fecha</th><th>Sucursal</th><th>Apertura</th><th>Ingresos</th><th>Egresos</th><th>Esperado</th><th>Real</th><th>Diferencia</th><th>Estado</th><th></th></tr></thead><tbody>' +
+  $('#tabla-historial-cajas').innerHTML = '<thead><tr><th>Fecha</th><th>Sucursal</th><th>Apertura</th><th>Efectivo</th><th>Transferencia</th><th>Tarjeta</th><th>Egresos</th><th>Esperado</th><th>Real</th><th>Diferencia</th><th>Estado</th><th></th></tr></thead><tbody>' +
     lista.map((c) => {
       const esperado = c.cierre_esperado != null ? c.cierre_esperado : c.apertura + c.ingresos - c.egresos;
       const diff = c.diferencia;
@@ -1959,6 +2630,8 @@ function pintarHistorialCajas(lista) {
         <td class="muted">${escapeHtml(c.sucursal_nombre || '—')}</td>
         <td>${fmtGs(c.apertura)}</td>
         <td style="color:var(--verde)">${fmtGs(c.ingresos || 0)}</td>
+        <td>${fmtGs(c.transferencias || 0)}</td>
+        <td>${fmtGs(c.tarjetas || 0)}</td>
         <td style="color:var(--rojo)">${fmtGs(c.egresos || 0)}</td>
         <td>${fmtGs(esperado)}</td>
         <td>${c.cierre_real != null ? fmtGs(c.cierre_real) : '—'}</td>
@@ -1973,7 +2646,8 @@ function pintarHistorialCajas(lista) {
 
 async function verCaja(id) {
   const c = await api('/api/cajas/' + id);
-  const esperado = c.apertura + c.total_ingresos - c.total_egresos;
+  const efectivo = c.total_efectivo ?? c.total_ingresos;
+  const esperado = c.apertura + efectivo - c.total_egresos;
   const movs = c.movimientos.map((m) => `<tr>
     <td>${m.tipo === 'ingreso' ? '<i data-lucide="arrow-up-right"></i> Ingreso' : '<i data-lucide="arrow-down-right"></i> Egreso'}</td>
     <td>${escapeHtml(m.concepto)}</td><td>${fmtGs(m.monto)}</td>
@@ -1982,7 +2656,9 @@ async function verCaja(id) {
   abrirModal(`Caja del ${fmtFecha(c.fecha)}`, `
     <div class="cards" style="margin-bottom:14px">
       <div class="card"><div class="valor">${fmtGs(c.apertura)}</div><div class="etiqueta">Apertura</div></div>
-      <div class="card positivo"><div class="valor">${fmtGs(c.total_ingresos)}</div><div class="etiqueta">Ingresos</div></div>
+      <div class="card positivo"><div class="valor">${fmtGs(efectivo)}</div><div class="etiqueta">Efectivo</div></div>
+      <div class="card"><div class="valor">${fmtGs(c.total_transferencia || 0)}</div><div class="etiqueta">Transferencias</div></div>
+      <div class="card"><div class="valor">${fmtGs(c.total_tarjeta || 0)}</div><div class="etiqueta">Tarjetas</div></div>
       <div class="card negativo"><div class="valor">${fmtGs(c.total_egresos)}</div><div class="etiqueta">Egresos</div></div>
       <div class="card ambar"><div class="valor">${fmtGs(esperado)}</div><div class="etiqueta">${c.estado === 'abierta' ? 'Esperado' : 'Cierre esperado'}</div></div>
     </div>
@@ -1990,36 +2666,19 @@ async function verCaja(id) {
     <table><thead><tr><th>Tipo</th><th>Concepto</th><th>Monto</th></tr></thead><tbody>${movs || emptyStateHtml('receipt', 'Sin movimientos')}</tbody></table>
     ${abierta ? `
       <hr>
-      <h3 style="margin-top:12px">Registrar egreso</h3>
-      <div class="form-row">
-        <div class="full"><label>Concepto<input type="text" id="vecaja-concepto" placeholder="Ej: compra de harina"></label></div>
-      </div>
-      <div class="form-row">
-        <div><label>Monto<input type="number" id="vecaja-monto"></label></div>
-      </div>
-      <p class="msg" id="vecaja-msg"></p>
-      <button class="btn" style="width:100%" onclick="egresoCajaModal(${c.id})">Registrar egreso</button>
-      <hr>
       <h3 style="margin-top:12px">Cerrar esta caja</h3>
-      <label>Dinero contado en caja<input type="number" id="vecaja-cierre" placeholder="0"></label>
+      <p class="muted">Contá los billetes y monedas; el total y la diferencia se calculan automáticamente.</p>
+      ${htmlArqueoCaja('vecaja-cierre-denom')}
       <p class="msg" id="vecaja-cierre-msg"></p>
       <button class="btn" style="width:100%" onclick="cerrarCajaModal(${c.id})">Cerrar caja</button>` : ''}
   `);
   reicons();
-}
-
-async function egresoCajaModal(cajaId) {
-  try {
-    await post('/api/caja/egreso', { caja_id: cajaId, concepto: $('#vecaja-concepto').value, monto: parseFloat($('#vecaja-monto').value) });
-    toast('Egreso registrado', 'ok');
-    verCaja(cajaId);
-    cargarCaja();
-  } catch (e) { msg($('#vecaja-msg'), escapeHtml(e.message), 'err'); }
+  if (abierta) conectarArqueoCaja('vecaja-cierre-denom', esperado);
 }
 
 async function cerrarCajaModal(cajaId) {
   try {
-    const r = await post('/api/caja/cerrar', { caja_id: cajaId, cierre_real: parseFloat($('#vecaja-cierre').value) });
+    const r = await post('/api/caja/cerrar', { caja_id: cajaId, denominaciones: leerArqueoCaja('vecaja-cierre-denom') });
     toast(`Caja cerrada. Diferencia: ${fmtGs(r.diferencia)}`, 'ok');
     msg($('#vecaja-cierre-msg'), `Caja cerrada. Esperado: ${fmtGs(r.esperado)} — Diferencia: ${fmtGs(r.diferencia)}`);
     cargarCaja();
@@ -2042,6 +2701,11 @@ async function reabrirCaja(id) {
       <b>Al reabrir se eliminan el cierre y la diferencia registrados.</b><br>
       La caja vuelve a estado abierto para agregar o corregir movimientos.
     </p>
+    <label style="display:block;margin-top:14px;font-weight:600">
+      Motivo de la reapertura
+      <input id="reabrir-motivo" placeholder="Ej: Error en el cierre, faltó registrar venta…"
+             style="margin-top:6px;width:100%;box-sizing:border-box">
+    </label>
     <div class="actions" style="margin-top:16px;justify-content:space-between">
       <button class="btn ghost" onclick="cerrarModal()">Cancelar</button>
       <button class="btn" onclick="confirmarReabrir(${c.id})"><i data-lucide="unlock"></i> Reabrir caja</button>
@@ -2051,12 +2715,115 @@ async function reabrirCaja(id) {
 
 async function confirmarReabrir(id) {
   try {
-    await post('/api/cajas/' + id + '/reabrir', {});
+    const motivo = ($('#reabrir-motivo')?.value || '').trim() || 'Reapertura de caja';
+    await post('/api/cajas/' + id + '/reabrir', { motivo });
     toast('Caja reabierta', 'ok');
     cerrarModal();
     cargarCaja();
     cargarDashboard();
   } catch (e) { toast(e.message, 'err'); }
+}
+
+// ── Auditoría ─────────────────────────────────────────────
+let _auditSucursales = null;
+
+async function cargarAuditoria(pagina = 1) {
+  const wrap = $('#tab-auditoria');
+  if (!wrap) return;
+
+  // Cargar sucursales la primera vez para el filtro
+  if (!_auditSucursales) {
+    try {
+      _auditSucursales = await api('/api/sucursales');
+      const sel = $('#audit-filtro-sucursal');
+      if (sel) {
+        sel.innerHTML = '<option value="">Todas las sucursales</option>' +
+          _auditSucursales.map((s) => `<option value="${s.id}">${escapeHtml(s.nombre)}</option>`).join('');
+      }
+    } catch (_) { _auditSucursales = []; }
+  }
+
+  const tabla = $('#tabla-auditoria');
+  const paginacion = $('#audit-paginacion');
+  if (tabla) tabla.innerHTML = `<tbody>${spinnerHtml()}</tbody>`;
+
+  const accion     = $('#audit-filtro-accion')?.value    || '';
+  const sucursal   = $('#audit-filtro-sucursal')?.value  || '';
+  const desde      = $('#audit-filtro-desde')?.value     || '';
+  const hasta      = $('#audit-filtro-hasta')?.value     || '';
+  const limite     = 25;
+
+  let url = `/api/auditoria?pagina=${pagina}&limite=${limite}`;
+  if (accion)   url += `&accion=${encodeURIComponent(accion)}`;
+  if (sucursal) url += `&sucursal_id=${encodeURIComponent(sucursal)}`;
+  if (desde)    url += `&desde=${encodeURIComponent(desde)}`;
+  if (hasta)    url += `&hasta=${encodeURIComponent(hasta)}`;
+
+  try {
+    const { registros, total, pagina: pag, paginas } = await api(url);
+
+    const etiquetaAccion = (a) => ({
+      anular_venta:  'Anulación de venta',
+      reabrir_caja:  'Reapertura de caja',
+      cambio_precio: 'Cambio de precio',
+    }[a] || a);
+
+    const filas = (registros || []).map((r) => {
+      let entidad = '';
+      if (r.entidad_tipo === 'venta')    entidad = `Venta #${r.entidad_id}`;
+      else if (r.entidad_tipo === 'caja') entidad = `Caja #${r.entidad_id}`;
+      else if (r.entidad_tipo === 'producto') entidad = `Producto #${r.entidad_id}`;
+      else if (r.entidad_id)             entidad = `${r.entidad_tipo} #${r.entidad_id}`;
+
+      let detalles = '';
+      if (r.detalles && Object.keys(r.detalles).length) {
+        const d = r.detalles;
+        if (r.accion === 'cambio_precio') {
+          detalles = `${d.nombre ? escapeHtml(d.nombre) + ' — ' : ''}${fmtGs(d.precio_anterior)} → ${fmtGs(d.precio_nuevo)}`;
+        } else {
+          detalles = `<details><summary class="muted" style="cursor:pointer;font-size:.82em">Ver datos</summary><pre style="font-size:.78em;white-space:pre-wrap;max-width:280px">${escapeHtml(JSON.stringify(d, null, 2))}</pre></details>`;
+        }
+      }
+
+      return `<tr>
+        <td style="white-space:nowrap">${fmtFechaHora(r.fecha)}</td>
+        <td>${escapeHtml(r.usuario_nombre || '—')}</td>
+        <td class="muted">${escapeHtml(r.sucursal_nombre || '—')}</td>
+        <td><span class="tag ${r.accion === 'anular_venta' ? 'danger' : r.accion === 'reabrir_caja' ? 'azul' : ''}">${etiquetaAccion(r.accion)}</span></td>
+        <td class="muted">${escapeHtml(entidad)}</td>
+        <td>${escapeHtml(r.motivo || '—')}</td>
+        <td style="font-size:.85em">${detalles}</td>
+      </tr>`;
+    }).join('');
+
+    if (tabla) {
+      tabla.innerHTML = `
+        <thead><tr>
+          <th>Fecha/hora</th><th>Usuario</th><th>Sucursal</th>
+          <th>Operación</th><th>Entidad</th><th>Motivo</th><th>Detalles</th>
+        </tr></thead>
+        <tbody>${filas || emptyStateHtml('shield-check', 'Sin registros de auditoría')}</tbody>`;
+    }
+
+    // Paginación
+    if (paginacion) {
+      if (paginas <= 1) {
+        paginacion.innerHTML = '';
+      } else {
+        paginacion.innerHTML = `
+          <button class="btn small ghost" ${pag <= 1 ? 'disabled' : `onclick="cargarAuditoria(${pag - 1})"`}>
+            <i data-lucide="chevron-left"></i> Anterior
+          </button>
+          <span class="muted" style="padding:0 12px">Página ${pag} de ${paginas} (${total} registros)</span>
+          <button class="btn small ghost" ${pag >= paginas ? 'disabled' : `onclick="cargarAuditoria(${pag + 1})"`}>
+            Siguiente <i data-lucide="chevron-right"></i>
+          </button>`;
+        reicons();
+      }
+    }
+  } catch (e) {
+    if (tabla) tabla.innerHTML = `<tbody><tr><td colspan="7" class="msg err">${escapeHtml(e.message)}</td></tr></tbody>`;
+  }
 }
 
 // ── Gastos ────────────────────────────────────────────────
@@ -2224,7 +2991,6 @@ async function cargarConfig() {
     <ul style="margin:0 0 14px;padding-left:20px;line-height:1.8">
       <li>Reportes históricos: últimos ${l.limite_reporte ? l.limite_reporte.dias : 7} días.</li>
       <li>Exportación de datos: deshabilitada (versión completa).</li>
-      <li>Comprobantes con la marca "SISTEMA EN PRUEBA".</li>
       <li>Al vencer, el sistema pasa a solo-lectura (no se apagan los datos).</li>
     </ul>
     <div class="form-row">

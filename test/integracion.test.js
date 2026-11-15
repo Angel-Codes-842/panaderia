@@ -13,11 +13,11 @@ const { Client } = require('pg');
 const PUERTO = 3417;
 const BASE = `http://127.0.0.1:${PUERTO}`;
 const DB_TEST = process.env.DB_TEST || 'panaderia_test';
-const URL_ADMIN = process.env.DATABASE_URL_ADMIN || 'postgres://panaderia:panaderia@localhost:5432/postgres';
-const URL_TEST = process.env.DATABASE_URL_TEST || `postgres://panaderia:panaderia@localhost:5432/${DB_TEST}`;
+const URL_ADMIN = process.env.DATABASE_URL_ADMIN || 'postgres://panaderia:admin123@localhost:5432/postgres';
+const URL_TEST = process.env.DATABASE_URL_TEST || `postgres://panaderia:admin123@localhost:5432/${DB_TEST}`;
 
 const REPO = path.join(__dirname, '..');
-const LOG = '/tmp/opencode/test-integracion.log';
+const LOG = process.env.LOG_FILE || path.join(os.tmpdir(), 'test-integracion.log');
 let proc = null;
 let tienePendientes = false;
 
@@ -187,6 +187,55 @@ test('productos: el código es opcional, se puede cambiar y sigue siendo único'
   assert.equal((await api('DELETE', `/api/productos/${creado.cuerpo.id}`, { sesion: admin })).status, 200);
 });
 
+test('recetas: calcula costo por rendimiento, sugiere precio y no altera stock sin confirmar', async () => {
+  const admin = await login('admin', 'admin123');
+  const producto = await post(admin, '/api/productos', {
+    nombre: 'Pan para costeo', unidad: 'kg', precio_venta: 3000, stock: 7,
+  });
+  assert.equal(producto.status, 200);
+
+  const harina = await post(admin, '/api/insumos', {
+    nombre: 'Harina de prueba', unidad_base: 'kg', costo_unitario: 8000,
+  });
+  const agua = await post(admin, '/api/insumos', {
+    nombre: 'Agua de prueba', unidad_base: 'l', costo_unitario: 1000,
+  });
+  assert.equal(harina.status, 200);
+  assert.equal(agua.status, 200);
+
+  const receta = await put(admin, `/api/recetas/${producto.cuerpo.id}`, {
+    rendimiento: 10,
+    margen: 40,
+    insumos: [
+      { insumo_id: harina.cuerpo.id, cantidad: 1.5, unidad: 'kg' },
+      { insumo_id: agua.cuerpo.id, cantidad: 500, unidad: 'ml' },
+    ],
+  });
+  assert.equal(receta.status, 200, JSON.stringify(receta.cuerpo));
+  assert.equal(receta.cuerpo.costo_lote, 12500);
+  assert.equal(receta.cuerpo.costo_unitario, 1250);
+  assert.equal(receta.cuerpo.precio_sugerido, 1750);
+
+  const productoSinCambios = await get(admin, `/api/productos/${producto.cuerpo.id}`);
+  assert.equal(productoSinCambios.cuerpo.stock, 7, 'guardar la fórmula no modifica el stock');
+  assert.equal(productoSinCambios.cuerpo.precio_venta, 3000, 'guardar la fórmula no cambia el precio');
+
+  const recetaInvalida = await put(admin, `/api/recetas/${producto.cuerpo.id}`, {
+    rendimiento: 10,
+    margen: 40,
+    insumos: [{ insumo_id: harina.cuerpo.id, cantidad: 1, unidad: 'l' }],
+  });
+  assert.equal(recetaInvalida.status, 400, 'rechaza unidades incompatibles');
+  const recetaGuardada = await get(admin, `/api/recetas/${producto.cuerpo.id}`);
+  assert.equal(recetaGuardada.cuerpo.costo_lote, 12500, 'un error conserva la receta anterior');
+
+  const aplicado = await post(admin, `/api/recetas/${producto.cuerpo.id}/aplicar-precio`, {});
+  assert.equal(aplicado.status, 200);
+  const productoActualizado = await get(admin, `/api/productos/${producto.cuerpo.id}`);
+  assert.equal(productoActualizado.cuerpo.precio_venta, 1750);
+  assert.equal(productoActualizado.cuerpo.stock, 7, 'aplicar el precio tampoco modifica el stock');
+});
+
 test('config: el logo del negocio viaja y persiste (PUT/GET)', async () => {
   const admin = await login('admin', 'admin123');
 
@@ -224,6 +273,71 @@ test('venta: descuenta stock, suma movimiento a caja y numera consecutivo', asyn
   assert.equal(caja.status, 200);
 });
 
+test('venta: pagos combinados separan efectivo, transferencia y tarjeta', async () => {
+  const admin = await login('admin', 'admin123');
+  const producto = (await oku(await get(admin, '/api/productos'), 'productos'))[0];
+  const precio = Number(producto.precio_venta);
+  const cajaAntes = await oku(await get(admin, '/api/caja', { sucursal_id: 1 }), 'caja antes del pago combinado');
+
+  const venta = await post(admin, '/api/ventas', {
+    items: [{ producto_id: producto.id, cantidad: 3 }],
+    forma_pago: 'mixto',
+    pagos: { efectivo: precio, transferencia: precio, tarjeta: precio },
+  });
+  assert.equal(venta.status, 200, JSON.stringify(venta.cuerpo));
+  assert.equal(venta.cuerpo.forma_pago, 'mixto');
+  assert.equal(venta.cuerpo.pagos.length, 3);
+
+  const cajaDespues = await oku(await get(admin, '/api/caja', { sucursal_id: 1 }), 'caja después del pago combinado');
+  assert.equal(cajaDespues.total_efectivo, cajaAntes.total_efectivo + precio);
+  assert.equal(cajaDespues.total_transferencia, cajaAntes.total_transferencia + precio);
+  assert.equal(cajaDespues.total_tarjeta, cajaAntes.total_tarjeta + precio);
+
+  const invalida = await post(admin, '/api/ventas', {
+    items: [{ producto_id: producto.id, cantidad: 2 }],
+    forma_pago: 'mixto',
+    pagos: { efectivo: precio, transferencia: 0, tarjeta: 0 },
+  });
+  assert.equal(invalida.status, 400, 'rechaza un desglose que no suma el total');
+});
+
+test('venta: conserva el importe ingresado y calcula la cantidad desde el precio', async () => {
+  const admin = await login('admin', 'admin123');
+  const creado = await post(admin, '/api/productos', {
+    nombre: 'Producto para probar importe exacto',
+    unidad: 'kg',
+    precio_venta: 13000,
+    stock: 2,
+  });
+  assert.equal(creado.status, 200);
+
+  const importe = 1000;
+  const cantidad = Math.round((importe / 13000) * 1000) / 1000;
+  const venta = await post(admin, '/api/ventas', {
+    items: [{ producto_id: creado.cuerpo.id, cantidad, importe }],
+  });
+  assert.equal(venta.status, 200, JSON.stringify(venta.cuerpo));
+  assert.equal(venta.cuerpo.total, importe);
+
+  const detalle = await oku(await get(admin, `/api/ventas/${venta.cuerpo.venta_id}`), 'detalle de venta');
+  assert.equal(Number(detalle.detalles[0].importe), importe);
+  assert.ok(Math.abs(Number(detalle.detalles[0].cantidad) - cantidad) < 1e-12);
+
+  const producto = (await oku(await get(admin, '/api/productos'), 'productos'))
+    .find((p) => p.id === creado.cuerpo.id);
+  assert.ok(Math.abs(Number(producto.stock) - (2 - cantidad)) < 1e-12);
+
+  const importeInconsistente = await post(admin, '/api/ventas', {
+    items: [{ producto_id: creado.cuerpo.id, cantidad, importe: importe + 100 }],
+  });
+  assert.equal(importeInconsistente.status, 400, 'no acepta importes que no coinciden con el peso y precio');
+
+  const demasiadosDecimales = await post(admin, '/api/ventas', {
+    items: [{ producto_id: creado.cuerpo.id, cantidad: 0.0007 }],
+  });
+  assert.equal(demasiadosDecimales.status, 400, 'rechaza cantidades con más de tres decimales');
+});
+
 test('ventas concurrentes no pueden vender más unidades que el stock', async () => {
   const admin = await login('admin', 'admin123');
   const creado = await post(admin, '/api/productos', {
@@ -253,12 +367,22 @@ test('anulación: restaura stock y saca la venta del reporte', async () => {
   const admin = await login('admin', 'admin123');
   const antes = (await oku(await get(admin, '/api/productos'), 'productos'))[1]; // pan hamburguesa
   const stockAntes = antes.stock;
+  const cajaAntes = await oku(await get(admin, '/api/caja', { sucursal_id: 1 }), 'caja antes de anular');
 
   const v = await post(admin, '/api/ventas', { items: [{ producto_id: antes.id, cantidad: 4 }] });
   assert.equal(v.status, 200);
+  const cajaConVenta = await oku(await get(admin, '/api/caja', { sucursal_id: 1 }), 'caja con venta');
 
   const anul = await post(admin, `/api/ventas/${v.cuerpo.venta_id}/anular`);
   assert.equal(anul.status, 200);
+  const cajaAnulada = await oku(await get(admin, '/api/caja', { sucursal_id: 1 }), 'caja después de anular');
+  assert.equal(cajaAnulada.total_efectivo, cajaConVenta.total_efectivo, 'conserva el ingreso y registra su devolución como egreso');
+  assert.equal(cajaAnulada.total_egresos, cajaAntes.total_egresos + v.cuerpo.total);
+  assert.equal(
+    cajaAnulada.apertura + cajaAnulada.total_efectivo - cajaAnulada.total_egresos,
+    cajaAntes.apertura + cajaAntes.total_efectivo - cajaAntes.total_egresos,
+    'la anulación no altera el efectivo esperado neto'
+  );
 
   const despues = (await oku(await get(admin, '/api/productos'), 'productos'))[1];
   assert.equal(despues.stock, stockAntes, 'anular restaura el stock');
@@ -270,6 +394,35 @@ test('anulación: restaura stock y saca la venta del reporte', async () => {
   const reporte = await oku(await get(admin, '/api/reporte/dia', { fecha: hoy, sucursal_id: 1 }), 'reporte');
   assert.ok(!reporte.productos_vendidos.some((p) => p.nombre === antes.nombre && p.cantidad === 4),
     'el reporte no cuenta la venta anulada');
+});
+
+test('auditoría: registra anulación con motivo y cambio de precio', async () => {
+  const admin = await login('admin', 'admin123');
+  const prods = await oku(await get(admin, '/api/productos'), 'productos');
+  const prod = prods[0];
+
+  // 1. Cambio de precio
+  const nuevoPrecio = prod.precio_venta + 1500;
+  await oku(await put(admin, `/api/productos/${prod.id}`, { ...prod, precio_venta: nuevoPrecio }), 'cambio precio');
+
+  // 2. Venta y anulación con motivo
+  const v = await post(admin, '/api/ventas', { items: [{ producto_id: prod.id, cantidad: 1 }] });
+  assert.equal(v.status, 200);
+  const motivo = 'Cobro erróneo registrado';
+  const anul = await post(admin, `/api/ventas/${v.cuerpo.venta_id}/anular`, { motivo });
+  assert.equal(anul.status, 200);
+
+  // 3. Consultar auditoría
+  const audit = await oku(await get(admin, '/api/auditoria', { accion: 'anular_venta' }), 'auditoria anulación');
+  assert.ok(audit.registros.length >= 1, 'hay registros de anulación');
+  const entrada = audit.registros.find((r) => r.entidad_id === v.cuerpo.venta_id);
+  assert.ok(entrada, 'la venta anulada figura en la auditoría');
+  assert.equal(entrada.motivo, motivo);
+  assert.equal(entrada.usuario_nombre, 'admin');
+
+  const auditPrecio = await oku(await get(admin, '/api/auditoria', { accion: 'cambio_precio' }), 'auditoria precio');
+  assert.ok(auditPrecio.registros.some((r) => r.entidad_id === prod.id && r.detalles.precio_nuevo === nuevoPrecio),
+    'el cambio de precio figura en auditoría');
 });
 
 test('control de ventas: filtra fechas y devuelve resumen paginado', async () => {
@@ -310,10 +463,11 @@ test('multisucursal: el dueño crea sucursal y usuario staff; el staff no admini
 
   const pepe = await login('pepe', 'pepe123');
 
-  // Staff no puede administrar sucursales ni usuarios.
+  // Staff no puede administrar sucursales ni usuarios ni ver auditoría.
   assert.equal((await get(pepe, '/api/sucursales')).status, 403);
   assert.equal((await get(pepe, '/api/usuarios')).status, 403);
   assert.equal((await get(pepe, '/api/config/fiscal')).status, 403);
+  assert.equal((await get(pepe, '/api/auditoria')).status, 403);
   assert.equal((await post(pepe, '/api/sucursales', { nombre: 'X' })).status, 403);
 });
 
@@ -394,6 +548,42 @@ test('reportes de la semana y listado de cajas responden', async () => {
   assert.ok(cajas.length >= 5, 'el seed deja una semana de cajas');
   assert.ok(cajas.every((c) => typeof c.sucursal_nombre === 'string'), 'trae sucursal_nombre');
   assert.ok(Number.isFinite(Number(cajas[0].ingresos)));
+});
+
+test('reporte histórico: resume el rango y desglosa productos por día y total', async () => {
+  const admin = await login('admin', 'admin123');
+  const fecha = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
+  const creado = await post(admin, '/api/productos', {
+    nombre: 'Producto para reporte histórico',
+    unidad: 'kg',
+    precio_venta: 13000,
+    stock: 1,
+  });
+  assert.equal(creado.status, 200);
+
+  const venta = await post(admin, '/api/ventas', {
+    items: [{ producto_id: creado.cuerpo.id, cantidad: 0.077, importe: 1001 }],
+  });
+  assert.equal(venta.status, 200, JSON.stringify(venta.cuerpo));
+
+  const reporte = await oku(await get(admin, '/api/reporte/rango', {
+    desde: fecha, hasta: fecha, sucursal_id: 1,
+  }), 'reporte histórico');
+  assert.equal(reporte.desde, fecha);
+  assert.equal(reporte.hasta, fecha);
+  assert.ok(reporte.total_ventas >= 1001);
+  assert.ok(reporte.cantidad_ventas >= 1);
+  assert.ok(reporte.ventas_por_dia.some((dia) => dia.fecha === fecha && dia.comprobantes >= 1));
+  assert.ok(reporte.pagos_total.some((pago) => pago.forma_pago === 'efectivo' && pago.total >= 1001));
+  assert.equal(reporte.productos_total.find((p) => p.producto_id === creado.cuerpo.id).total, 1001);
+  assert.equal(reporte.productos_por_dia.find((p) => p.producto_id === creado.cuerpo.id).cantidad, 0.077);
+  assert.equal(reporte.productos_por_dia.find((p) => p.producto_id === creado.cuerpo.id).total, 1001);
+  assert.ok(Array.isArray(reporte.produccion_por_dia));
+  assert.ok(Array.isArray(reporte.gastos_por_dia));
+  assert.ok(Array.isArray(reporte.cajas_por_dia));
+
+  const rangoInvalido = await get(admin, '/api/reporte/rango', { desde: fecha, hasta: '2020-02-31' });
+  assert.equal(rangoInvalido.status, 400);
 });
 
 test('gastos: se registran contra la caja y aparecen en el historial', async () => {
@@ -573,10 +763,16 @@ test('caja: una caja de un día anterior sin cerrar se lista y se puede cerrar',
   assert.equal(Number(propia.ingresos), 50000);
 
   // Se cierra con el dinero contado de ese día y deja de estar pendiente.
-  const cierre = await post(admin, '/api/caja/cerrar', { caja_id: cajaId, cierre_real: 150000 });
+  const cierre = await post(admin, '/api/caja/cerrar', {
+    caja_id: cajaId,
+    denominaciones: { 100000: 1, 50000: 1 },
+  });
   assert.equal(cierre.status, 200, JSON.stringify(cierre.cuerpo));
   assert.equal(cierre.cuerpo.esperado, 150000);
   assert.equal(cierre.cuerpo.diferencia, 0);
+  const cajaCerrada = await oku(await get(admin, `/api/cajas/${cajaId}`), 'caja cerrada con arqueo');
+  assert.equal(cajaCerrada.cierre_real, 150000);
+  assert.deepEqual(cajaCerrada.cierre_denominaciones, { '100000': 1, '50000': 1 });
 
   const despues = await oku(await get(admin, '/api/caja/pendientes'), 'cajas pendientes después');
   assert.ok(!despues.some((c) => c.id === cajaId), 'ya no figura como pendiente');

@@ -583,6 +583,8 @@ tr.anulada { opacity: .45; text-decoration: line-through; }
 .tag.ticket      { background: var(--crema-dark); color: var(--texto-suave); }
 .tag.ambar       { background: var(--ambar-bg); color: #8a6415; }
 .tag.ok          { background: var(--verde-bg); color: #3f5f45; }
+.tag.danger, .tag.rojo { background: var(--rojo-bg); color: var(--rojo); }
+.tag.azul        { background: var(--azul-bg); color: var(--azul); }
 
 /* ── Buttons ──────────────────────────────────────────────── */
 button.btn {
@@ -787,6 +789,15 @@ input, select {
   color: var(--texto);
   box-shadow: inset 0 1px 2px rgba(74,48,24,.05);
   transition: border-color var(--transition), box-shadow var(--transition);
+}
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 input:focus, select:focus {
   outline: none;
@@ -1508,6 +1519,14 @@ button.prod.sin-stock { opacity: .55; }
    aunque una etiqueta ocupe dos líneas y la otra una sola. */
 .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: end; }
 .form-row .full { grid-column: 1 / -1; }
+.denominaciones-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 10px;
+  margin: 10px 0;
+}
+.denominaciones-grid label { margin: 0; font-size: 12px; }
+.denominaciones-grid input { margin-top: 5px; }
 .receta-rows { margin: 10px 0; }
 .receta-row {
   display: grid;
@@ -1530,6 +1549,63 @@ button.prod.sin-stock { opacity: .55; }
   transition: background var(--transition);
 }
 .receta-row .rm:hover { background: var(--rojo-bg); border-color: rgba(220,38,38,.3); }
+
+.receta-insumo-fila {
+  display: grid;
+  grid-template-columns: minmax(130px, 2fr) minmax(90px, 1fr) 95px 38px;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--borde, #e2e8f0);
+  border-radius: 8px;
+}
+.receta-insumo-fila label {
+  display: block;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--texto-muted, #64748b);
+}
+.receta-insumo-fila input,
+.receta-insumo-fila select {
+  margin: 4px 0 0 0;
+  width: 100%;
+  height: 38px;
+  box-sizing: border-box;
+}
+.receta-quitar-insumo {
+  height: 38px;
+  width: 38px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--rojo-bg, #fee2e2);
+  color: var(--rojo, #dc2626);
+  border: 1px solid rgba(220, 38, 38, 0.25);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.receta-quitar-insumo:hover {
+  background: var(--rojo, #dc2626);
+  color: #ffffff;
+}
+.receta-quitar-insumo i,
+.receta-quitar-insumo svg {
+  width: 18px;
+  height: 18px;
+}
+@media (max-width: 600px) {
+  .receta-insumo-fila {
+    grid-template-columns: 1fr 1fr;
+  }
+  .receta-insumo-fila .campo-insumo {
+    grid-column: 1 / -1;
+  }
+}
 
 /* ── Toast System ─────────────────────────────────────────── */
 #toast-container {

@@ -59,16 +59,97 @@ const SQL = {
                   cliente_nombre_snapshot, cliente_documento_snapshot, cliente_tipo_documento_snapshot
                 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24) RETURNING id`,
   insertDetalle: `INSERT INTO venta_detalles
-                  (venta_id, producto_id, cantidad, precio, costo, nombre_producto, iva_tasa, iva_base, iva_monto, descuento)
-                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+                  (venta_id, producto_id, cantidad, precio, costo, nombre_producto, iva_tasa, iva_base, iva_monto, descuento, importe)
+                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
   insertMovimiento: `INSERT INTO movimientos_caja (caja_id, tipo, concepto, monto, fecha) VALUES ($1,$2,$3,$4,$5)`,
 };
+const DENOMINACIONES_GUARANIES = [100000, 50000, 20000, 10000, 5000, 2000, 1000, 500, 100, 50];
 // Versión sobre el pool (lecturas sin transacción).
 const q = {
   productoPorId: (id) => db.get(`SELECT * FROM productos WHERE id = $1 AND activo = 1`, [id]),
   ventaNoAnulada: (id) => db.get(`SELECT * FROM ventas WHERE id = $1 AND anulada = 0`, [id]),
   cajaAbiertaFechaSucursal: (fecha, suc) => db.get(SQL.cajaAbiertaFechaSucursal, [fecha, suc]),
 };
+
+function validarDenominaciones(datos) {
+  if (!datos || typeof datos !== 'object' || Array.isArray(datos)) return null;
+  const conteo = {};
+  let total = 0;
+  for (const [clave, valor] of Object.entries(datos)) {
+    const denominacion = Number(clave);
+    if (!DENOMINACIONES_GUARANIES.includes(denominacion)) return null;
+    const cantidad = entero(valor, 0, null);
+    if (cantidad === null || cantidad > 1_000_000) return null;
+    if (cantidad > 0) conteo[denominacion] = cantidad;
+    total += denominacion * cantidad;
+  }
+  return { conteo, total };
+}
+
+async function resumenPagosCaja(caja, executor = db) {
+  const [pagos, abonos, egresos, otrosIngresos] = await Promise.all([
+    executor.get(`
+      SELECT
+        COALESCE(SUM(vp.monto) FILTER (WHERE vp.forma_pago = 'efectivo'), 0)::float8 AS efectivo,
+        COALESCE(SUM(vp.monto) FILTER (WHERE v.anulada = 0 AND vp.forma_pago = 'transferencia'), 0)::float8 AS transferencia,
+        COALESCE(SUM(vp.monto) FILTER (WHERE v.anulada = 0 AND vp.forma_pago = 'tarjeta'), 0)::float8 AS tarjeta
+      FROM venta_pagos vp
+      JOIN ventas v ON v.id = vp.venta_id
+      WHERE v.fecha = $1 AND v.sucursal_id = $2
+    `, [caja.fecha, caja.sucursal_id]),
+    executor.get(`SELECT COALESCE(SUM(monto), 0)::float8 AS total FROM abonos WHERE caja_id = $1`, [caja.id]),
+    executor.get(`SELECT COALESCE(SUM(monto), 0)::float8 AS total FROM movimientos_caja WHERE caja_id = $1 AND tipo = 'egreso'`, [caja.id]),
+    executor.get(`SELECT COALESCE(SUM(monto), 0)::float8 AS total FROM movimientos_caja WHERE caja_id = $1 AND tipo = 'ingreso' AND NOT (concepto LIKE 'Venta N° %')`, [caja.id]),
+  ]);
+  const efectivo = (Number(abonos.total) || 0) + (Number(pagos.efectivo) || 0) + (Number(otrosIngresos.total) || 0);
+  return {
+    total_efectivo: efectivo,
+    total_transferencia: Number(pagos.transferencia) || 0,
+    total_tarjeta: Number(pagos.tarjeta) || 0,
+    total_ingresos: efectivo,
+    total_egresos: Number(egresos.total) || 0,
+  };
+}
+
+async function movimientosCaja(caja) {
+  const [movimientos, pagos] = await Promise.all([
+    db.all(`SELECT * FROM movimientos_caja
+      WHERE caja_id = $1 AND NOT (
+        tipo = 'ingreso' AND concepto LIKE 'Venta N° %' AND concepto NOT LIKE '%(abono)%'
+      )
+      ORDER BY id`, [caja.id]),
+    db.all(`
+      SELECT v.id, v.numero_comprobante, v.forma_pago AS venta_forma_pago, vp.forma_pago, vp.monto
+      FROM ventas v JOIN venta_pagos vp ON vp.venta_id = v.id
+      WHERE v.fecha = $1 AND v.sucursal_id = $2 AND (v.anulada = 0 OR vp.forma_pago = 'efectivo')
+      ORDER BY v.id, vp.forma_pago
+    `, [caja.fecha, caja.sucursal_id]),
+  ]);
+  return movimientos.concat(pagos.map((p) => ({
+    tipo: 'ingreso',
+    concepto: p.venta_forma_pago === 'mixto'
+      ? `Venta N° ${p.numero_comprobante} — ${p.forma_pago}`
+      : `Venta N° ${p.numero_comprobante}`,
+    monto: Number(p.monto),
+  })));
+}
+
+async function registrarAuditoria(executor, { usuarioId, usuarioNombre, sucursalId, accion, entidadTipo, entidadId, detalles, motivo }) {
+  const runner = executor || db;
+  await runner.run(`
+    INSERT INTO auditoria (usuario_id, usuario_nombre, sucursal_id, accion, entidad_tipo, entidad_id, detalles, motivo)
+    VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+  `, [
+    usuarioId || null,
+    usuarioNombre || '',
+    sucursalId || null,
+    accion,
+    entidadTipo,
+    entidadId || null,
+    detalles ? JSON.stringify(detalles) : null,
+    motivo || ''
+  ]);
+}
 
 // ================= AUTENTICACIÓN =================
 
@@ -332,7 +413,7 @@ app.post('/api/gastos', h(async (req, res) => {
   const fecha = str(req.body.fecha, 10) || hoy();
   const sucursalId = sucursalOperativa(req);
   const resultado = await db.transakt(async (t) => {
-    const caja = await t.get(SQL.cajaAbiertaFechaSucursal, [fecha, sucursalId]);
+    const caja = await t.get(`${SQL.cajaAbiertaFechaSucursal} FOR UPDATE`, [fecha, sucursalId]);
     const cajaId = caja ? caja.id : null;
     const info = await t.get(
       `INSERT INTO gastos (concepto, monto, categoria, fecha, sucursal_id, caja_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
@@ -360,10 +441,8 @@ app.delete('/api/gastos/:id', h(async (req, res) => {
         [gasto.caja_id, `Gasto: ${gasto.concepto}`, gasto.monto]);
       const caja = await t.get(`SELECT * FROM cajas WHERE id = $1`, [gasto.caja_id]);
       if (caja && caja.estado === 'cerrada') {
-        const movs = await t.all(`SELECT * FROM movimientos_caja WHERE caja_id = $1`, [caja.id]);
-        const ingresos = movs.filter((m) => m.tipo === 'ingreso').reduce((a, m) => a + m.monto, 0);
-        const egresos = movs.filter((m) => m.tipo === 'egreso').reduce((a, m) => a + m.monto, 0);
-        const esperado = caja.apertura + ingresos - egresos;
+        const resumen = await resumenPagosCaja(caja, t);
+        const esperado = caja.apertura + resumen.total_efectivo - resumen.total_egresos;
         await t.run(`UPDATE cajas SET cierre_esperado = $1, diferencia = $2 WHERE id = $3`,
           [esperado, caja.cierre_real - esperado, caja.id]);
       }
@@ -408,7 +487,7 @@ app.get('/api/reporte/dia', h(async (req, res) => {
       WHERE l.fecha = $1 ${condLote} ORDER BY l.id
     `, params),
     db.all(`
-      SELECT p.nombre, p.unidad, p.categoria, SUM(vd.cantidad) AS cantidad, SUM(vd.cantidad * vd.precio) AS total
+      SELECT p.nombre, p.unidad, p.categoria, SUM(vd.cantidad) AS cantidad, SUM(vd.importe) AS total
       FROM venta_detalles vd JOIN productos p ON p.id = vd.producto_id
       JOIN ventas v ON v.id = vd.venta_id
       WHERE v.fecha = $1 AND v.anulada = 0 ${condDetalle}
@@ -428,6 +507,155 @@ app.get('/api/reporte/dia', h(async (req, res) => {
     consolidada: true,
   } : null);
   res.json({ fecha, total_ventas: totalVentas, cantidad_ventas: ventas.length, por_forma: porForma, lotes, productos_vendidos: productosVendidos, caja });
+}));
+
+app.get('/api/reporte/rango', h(async (req, res) => {
+  const validarFechaCalendario = (valor) => {
+    const fecha = fechaValida(valor);
+    if (!fecha) return null;
+    const fechaUTC = new Date(`${fecha}T00:00:00.000Z`);
+    return Number.isNaN(fechaUTC.getTime()) || fechaUTC.toISOString().slice(0, 10) !== fecha ? null : fecha;
+  };
+  const desde = validarFechaCalendario(req.query.desde);
+  const hasta = validarFechaCalendario(req.query.hasta);
+  if (!desde || !hasta || desde > hasta || hasta > hoy()) {
+    return res.status(400).json({ error: 'Ingresá un rango válido, desde la fecha inicial hasta hoy.' });
+  }
+
+  const limite = await licencia.limiteReporte();
+  if (limite && desde < limite.desde) {
+    return res.json({
+      limitado: true,
+      desde,
+      hasta,
+      minimo: limite.desde,
+      mensaje: `En la versión de prueba los reportes llegan a los últimos ${licencia.DIAS_REPORTE_PRUEBA} días. Para consultar fechas anteriores necesitás la versión completa.`,
+    });
+  }
+
+  const suc = req.sesion.sucursal_id || entero(req.query.sucursal_id, 1, null);
+  const params = suc ? [desde, hasta, suc] : [desde, hasta];
+  const condVenta = suc ? 'AND v.sucursal_id = $3' : '';
+  const condSucursal = suc ? 'AND sucursal_id = $3' : '';
+  const condCaja = suc ? 'AND c.sucursal_id = $3' : '';
+  const condGasto = suc ? 'AND g.sucursal_id = $3' : '';
+  const [
+    ventasPorDia, pagosPorDia, productosPorDia, produccionPorDia,
+    cajasPorDia, gastosPorDia, gastosPorCategoria,
+  ] = await Promise.all([
+    db.all(`
+      SELECT v.fecha, COALESCE(SUM(v.total), 0)::float8 AS total,
+             COUNT(*)::int AS comprobantes
+      FROM ventas v
+      WHERE v.fecha BETWEEN $1 AND $2 AND v.anulada = 0 ${condVenta}
+      GROUP BY v.fecha ORDER BY v.fecha
+    `, params),
+    db.all(`
+      SELECT pagos.fecha, pagos.forma_pago, SUM(pagos.monto)::float8 AS total
+      FROM (
+        SELECT v.fecha, vp.forma_pago, vp.monto
+        FROM venta_pagos vp
+        JOIN ventas v ON v.id = vp.venta_id
+        WHERE v.fecha BETWEEN $1 AND $2 AND v.anulada = 0 ${condVenta}
+        UNION ALL
+        SELECT a.fecha, 'efectivo' AS forma_pago, a.monto
+        FROM abonos a
+        WHERE a.fecha BETWEEN $1 AND $2 ${condSucursal}
+      ) pagos
+      GROUP BY pagos.fecha, pagos.forma_pago
+      ORDER BY pagos.fecha, pagos.forma_pago
+    `, params),
+    db.all(`
+      SELECT v.fecha, p.id AS producto_id,
+             COALESCE(NULLIF(vd.nombre_producto, ''), p.nombre) AS nombre,
+             p.unidad, SUM(vd.cantidad)::float8 AS cantidad,
+             SUM(vd.importe - vd.descuento)::float8 AS total
+      FROM venta_detalles vd
+      JOIN ventas v ON v.id = vd.venta_id
+      JOIN productos p ON p.id = vd.producto_id
+      WHERE v.fecha BETWEEN $1 AND $2 AND v.anulada = 0 ${condVenta}
+      GROUP BY v.fecha, p.id, COALESCE(NULLIF(vd.nombre_producto, ''), p.nombre), p.unidad
+      ORDER BY v.fecha, nombre
+    `, params),
+    db.all(`
+      SELECT l.fecha, l.producto_id, p.nombre, p.unidad,
+             SUM(l.unidades_producidas)::float8 AS cantidad
+      FROM lotes l
+      JOIN productos p ON p.id = l.producto_id
+      WHERE l.fecha BETWEEN $1 AND $2 ${suc ? 'AND l.sucursal_id = $3' : ''}
+      GROUP BY l.fecha, l.producto_id, p.nombre, p.unidad
+      ORDER BY l.fecha, p.nombre
+    `, params),
+    db.all(`
+      SELECT c.fecha, SUM(c.apertura)::float8 AS apertura,
+        SUM(CASE WHEN c.cierre_esperado IS NOT NULL THEN c.cierre_esperado ELSE
+          c.apertura
+          + COALESCE((SELECT SUM(vp.monto) FROM venta_pagos vp
+              JOIN ventas v ON v.id = vp.venta_id
+              WHERE v.fecha = c.fecha AND v.sucursal_id = c.sucursal_id
+                AND vp.forma_pago = 'efectivo'), 0)
+          + COALESCE((SELECT SUM(a.monto) FROM abonos a WHERE a.caja_id = c.id), 0)
+          + COALESCE((SELECT SUM(m.monto) FROM movimientos_caja m
+              WHERE m.caja_id = c.id AND m.tipo = 'ingreso' AND NOT (m.concepto LIKE 'Venta N° %')), 0)
+          - COALESCE((SELECT SUM(m.monto) FROM movimientos_caja m
+              WHERE m.caja_id = c.id AND m.tipo = 'egreso'), 0)
+        END)::float8 AS esperado,
+        CASE WHEN BOOL_AND(c.cierre_real IS NOT NULL)
+          THEN SUM(c.cierre_real)::float8 ELSE NULL END AS real,
+        CASE WHEN BOOL_AND(c.diferencia IS NOT NULL)
+          THEN SUM(c.diferencia)::float8 ELSE NULL END AS diferencia,
+        CASE WHEN BOOL_AND(c.estado = 'cerrada') THEN 'cerrada' ELSE 'abierta' END AS estado
+      FROM cajas c
+      WHERE c.fecha BETWEEN $1 AND $2 ${condCaja}
+      GROUP BY c.fecha ORDER BY c.fecha
+    `, params),
+    db.all(`
+      SELECT g.fecha, SUM(g.monto)::float8 AS total
+      FROM gastos g
+      WHERE g.fecha BETWEEN $1 AND $2 ${condGasto}
+      GROUP BY g.fecha ORDER BY g.fecha
+    `, params),
+    db.all(`
+      SELECT g.categoria, SUM(g.monto)::float8 AS total
+      FROM gastos g
+      WHERE g.fecha BETWEEN $1 AND $2 ${condGasto}
+      GROUP BY g.categoria ORDER BY total DESC, g.categoria
+    `, params),
+  ]);
+
+  const pagosTotal = new Map();
+  for (const pago of pagosPorDia) {
+    pagosTotal.set(pago.forma_pago, (pagosTotal.get(pago.forma_pago) || 0) + Number(pago.total));
+  }
+  const productosTotal = new Map();
+  for (const producto of productosPorDia) {
+    const acumulado = productosTotal.get(producto.producto_id) || {
+      producto_id: producto.producto_id,
+      nombre: producto.nombre,
+      unidad: producto.unidad,
+      cantidad: 0,
+      total: 0,
+    };
+    acumulado.cantidad += Number(producto.cantidad);
+    acumulado.total += Number(producto.total);
+    productosTotal.set(producto.producto_id, acumulado);
+  }
+
+  res.json({
+    desde,
+    hasta,
+    total_ventas: ventasPorDia.reduce((total, dia) => total + Number(dia.total), 0),
+    cantidad_ventas: ventasPorDia.reduce((total, dia) => total + dia.comprobantes, 0),
+    ventas_por_dia: ventasPorDia,
+    pagos_total: [...pagosTotal].map(([forma_pago, total]) => ({ forma_pago, total })),
+    pagos_por_dia: pagosPorDia,
+    productos_total: [...productosTotal.values()].sort((a, b) => b.total - a.total),
+    productos_por_dia: productosPorDia,
+    produccion_por_dia: produccionPorDia,
+    cajas_por_dia: cajasPorDia,
+    gastos_por_dia: gastosPorDia,
+    gastos_por_categoria: gastosPorCategoria,
+  });
 }));
 
 app.get('/api/reporte/semana', h(async (req, res) => {
@@ -456,7 +684,7 @@ app.get('/api/reporte/semana', h(async (req, res) => {
       FROM cajas WHERE fecha BETWEEN $1 AND $2 ${condCaja}
     `, params),
     db.all(`
-      SELECT p.nombre, p.unidad, SUM(vd.cantidad) AS cantidad, SUM(vd.cantidad * vd.precio) AS total
+      SELECT p.nombre, p.unidad, SUM(vd.cantidad) AS cantidad, SUM(vd.importe) AS total
       FROM venta_detalles vd JOIN productos p ON p.id = vd.producto_id
       JOIN ventas v ON v.id = vd.venta_id
       WHERE v.anulada = 0 ${topCond}
@@ -534,7 +762,7 @@ app.put('/api/productos/:id', h(async (req, res) => {
   const precio = num(req.body.precio_venta, 0, 1e12, 0);
   const stock = num(req.body.stock, 0, 1e9, null);
   const id = entero(req.params.id, 1, 0);
-  const actual = await db.get(`SELECT codigo FROM productos WHERE id = $1`, [id]);
+  const actual = await db.get(`SELECT codigo, precio_venta, nombre FROM productos WHERE id = $1`, [id]);
   if (!actual) return res.status(404).json({ error: 'No existe' });
   const codigo = req.body.codigo === undefined ? actual.codigo : normalizarCodigo(req.body.codigo);
   try {
@@ -544,6 +772,22 @@ app.put('/api/productos/:id', h(async (req, res) => {
     } else {
       await db.run(`UPDATE productos SET nombre=$1, categoria=$2, unidad=$3, precio_venta=$4, stock=$5, codigo=$6 WHERE id=$7`,
         [nombre, str(req.body.categoria, 50) || 'Otros', unidad, precio, stock, codigo, id]);
+    }
+    if (Number(actual.precio_venta) !== Number(precio)) {
+      await registrarAuditoria(null, {
+        usuarioId: req.sesion ? req.sesion.id : null,
+        usuarioNombre: req.sesion ? req.sesion.usuario : 'sistema',
+        sucursalId: req.sesion ? req.sesion.sucursal_id : null,
+        accion: 'cambio_precio',
+        entidadTipo: 'producto',
+        entidadId: id,
+        detalles: {
+          producto: nombre,
+          precio_anterior: Number(actual.precio_venta),
+          precio_nuevo: Number(precio),
+        },
+        motivo: str(req.body.motivo, 250) || 'Modificación en catálogo',
+      });
     }
     res.json({ ok: true, codigo: codigo || null });
   } catch (e) {
@@ -555,6 +799,58 @@ app.put('/api/productos/:id', h(async (req, res) => {
 app.delete('/api/productos/:id', h(async (req, res) => {
   await db.run(`UPDATE productos SET activo = 0 WHERE id = $1`, [entero(req.params.id, 1, 0)]);
   res.json({ ok: true });
+}));
+
+// ================= FÓRMULAS Y COSTOS DE PRODUCCIÓN =================
+
+app.get('/api/insumos', soloDueño('Solo el dueño puede administrar insumos y fórmulas'), h(async (_req, res) => {
+  res.json(await negocio.listarInsumos());
+}));
+
+app.post('/api/insumos', soloDueño('Solo el dueño puede administrar insumos y fórmulas'), h(async (req, res) => {
+  res.json(await negocio.guardarInsumo(req.body));
+}));
+
+app.put('/api/insumos/:id', soloDueño('Solo el dueño puede administrar insumos y fórmulas'), h(async (req, res) => {
+  const id = entero(req.params.id, 1, null);
+  if (id === null) return res.status(400).json({ error: 'Insumo inválido' });
+  res.json(await negocio.guardarInsumo(req.body, id));
+}));
+
+app.get('/api/recetas/:productoId', soloDueño('Solo el dueño puede administrar insumos y fórmulas'), h(async (req, res) => {
+  const productoId = entero(req.params.productoId, 1, null);
+  if (productoId === null) return res.status(400).json({ error: 'Producto inválido' });
+  res.json(await negocio.obtenerReceta(productoId));
+}));
+
+app.put('/api/recetas/:productoId', soloDueño('Solo el dueño puede administrar insumos y fórmulas'), h(async (req, res) => {
+  const productoId = entero(req.params.productoId, 1, null);
+  if (productoId === null) return res.status(400).json({ error: 'Producto inválido' });
+  res.json(await negocio.guardarReceta(productoId, req.body));
+}));
+
+app.post('/api/recetas/:productoId/aplicar-precio', soloDueño('Solo el dueño puede administrar insumos y fórmulas'), h(async (req, res) => {
+  const productoId = entero(req.params.productoId, 1, null);
+  if (productoId === null) return res.status(400).json({ error: 'Producto inválido' });
+  const actual = await db.get(`SELECT nombre, precio_venta FROM productos WHERE id = $1`, [productoId]);
+  const costo = await negocio.aplicarPrecioSugerido(productoId);
+  if (actual && Number(actual.precio_venta) !== Number(costo.precio_sugerido)) {
+    await registrarAuditoria(null, {
+      usuarioId: req.sesion ? req.sesion.id : null,
+      usuarioNombre: req.sesion ? req.sesion.usuario : 'sistema',
+      sucursalId: req.sesion ? req.sesion.sucursal_id : null,
+      accion: 'cambio_precio',
+      entidadTipo: 'producto',
+      entidadId: productoId,
+      detalles: {
+        producto: actual.nombre,
+        precio_anterior: Number(actual.precio_venta),
+        precio_nuevo: Number(costo.precio_sugerido),
+      },
+      motivo: 'Aplicación de precio sugerido por fórmula',
+    });
+  }
+  res.json(costo);
 }));
 
 // ================= PRODUCCIÓN =================
@@ -703,7 +999,7 @@ app.post('/api/ventas', h(async (req, res) => {
   if (tipoDoc === 'factura' && !entero(req.body.cliente_id, 1, null)) {
     return res.status(400).json({ error: 'La factura necesita un cliente con RUC o cédula' });
   }
-  const formaPago = esFormaPago(req.body.forma_pago);
+  const formaPago = req.body.forma_pago === 'mixto' ? 'mixto' : esFormaPago(req.body.forma_pago);
   const sucursalId = sucursalOperativa(req);
   const clienteId = entero(req.body.cliente_id, 1, null);
   if (formaPago === 'credito' && !clienteId) {
@@ -717,7 +1013,7 @@ app.post('/api/ventas', h(async (req, res) => {
   for (let intento = 0; intento < 10; intento++) {
     try {
       resultado = await db.transakt(async (t) => {
-        const cajaHoy = await t.get(SQL.cajaAbiertaFechaSucursal, [hoy(), sucursalId]);
+        const cajaHoy = await t.get(`${SQL.cajaAbiertaFechaSucursal} FOR UPDATE`, [hoy(), sucursalId]);
         if (!cajaHoy) throw bErr('No hay una caja abierta para hoy en esa sucursal. Abrí la caja en el módulo Caja antes de vender.');
 
         let perfilFiscal = null;
@@ -750,9 +1046,15 @@ app.post('/api/ventas', h(async (req, res) => {
         }
         const itemsValidados = items.map((it) => {
           const pid = entero(it.producto_id, 1, null);
-          const cantidad = num(it.cantidad, 0.001, 1e9, null);
-          if (pid === null || cantidad === null) throw bErr('Hay un producto o cantidad inválida en el ticket');
-          return { productoId: pid, cantidad };
+          const cantidad = num(it.cantidad, it.importe === undefined ? 0.001 : 0.000000001, 1e9, null);
+          const importe = it.importe === undefined ? null : num(it.importe, 0, 1e12, null);
+          if (pid === null || cantidad === null || (it.importe !== undefined && importe === null)) {
+            throw bErr('Hay un producto, cantidad o importe inválido en el ticket');
+          }
+          if (Math.abs(cantidad * 1000 - Math.round(cantidad * 1000)) > 0.00001) {
+            throw bErr('La cantidad admite hasta tres decimales');
+          }
+          return { productoId: pid, cantidad, importe };
         });
         const idsProductos = [...new Set(itemsValidados.map((it) => it.productoId))].sort((a, b) => a - b);
         const productos = await t.all(
@@ -779,7 +1081,12 @@ app.post('/api/ventas', h(async (req, res) => {
             throw bErr(`Stock insuficiente de ${p.nombre}: hay ${p.stock}, pide ${cantidadAcumulada}`);
           }
           cantidadesPorProducto.set(p.id, cantidadAcumulada);
-          const importe = precio * it.cantidad;
+          const importeCalculado = precio * it.cantidad;
+          const importe = it.importe === null ? importeCalculado : it.importe;
+          const toleranciaImporte = Math.max(0.001, precio * 0.0005 + 0.001);
+          if (Math.abs(importe - importeCalculado) > toleranciaImporte) {
+            throw bErr(`El importe de ${p.nombre} no coincide con su cantidad y precio.`);
+          }
           subtotal += importe;
           detalles.push({ producto: p, cantidad: it.cantidad, precio, importe });
         }
@@ -794,17 +1101,45 @@ app.post('/api/ventas', h(async (req, res) => {
         // A crédito se cobra solo el abono inicial (puede ser 0) y el resto
         // queda como deuda del cliente. En las demás formas se cobra todo.
         let pagado = total;
+        let pagos = [];
+        let formaPagoVenta = formaPago;
         if (formaPago === 'credito') {
+          if (req.body.pagos !== undefined) throw bErr('Los abonos a crédito se registran por separado; no uses pagos combinados en esta venta.');
           pagado = req.body.abono === undefined || req.body.abono === '' || req.body.abono === null
             ? 0
             : num(req.body.abono, 0, total, null);
           if (pagado === null) throw bErr('El abono no puede ser mayor al total');
+        } else if (req.body.pagos !== undefined) {
+          if (!req.body.pagos || typeof req.body.pagos !== 'object' || Array.isArray(req.body.pagos)) {
+            throw bErr('Ingresá los importes de cada medio de pago.');
+          }
+          const medios = ['efectivo', 'transferencia', 'tarjeta'];
+          if (Object.keys(req.body.pagos).some((medio) => !medios.includes(medio))) {
+            throw bErr('Hay un medio de pago no válido.');
+          }
+          pagos = medios.map((medio) => ({
+            forma_pago: medio,
+            monto: num(req.body.pagos[medio] === undefined ? 0 : req.body.pagos[medio], 0, 1e12, null),
+          }));
+          if (pagos.some((p) => p.monto === null)) throw bErr('Ingresá importes válidos para cada medio de pago.');
+          pagos = pagos.filter((p) => p.monto > 0);
+          const sumaPagos = pagos.reduce((suma, p) => suma + p.monto, 0);
+          if (Math.abs(sumaPagos - total) > 0.009) {
+            throw bErr('La suma de los medios de pago debe coincidir con el total de la venta.');
+          }
+          if (total > 0 && !pagos.length) throw bErr('Ingresá al menos un medio de pago.');
+          if (pagos.length > 1) formaPagoVenta = 'mixto';
+          else if (pagos.length === 1) formaPagoVenta = pagos[0].forma_pago;
+          else if (formaPagoVenta === 'mixto') throw bErr('Ingresá al menos un medio de pago.');
+        } else {
+          if (formaPago === 'mixto') throw bErr('Ingresá los importes de cada medio de pago.');
+          if (total > 0) pagos = [{ forma_pago: formaPago, monto: total }];
         }
         const estadoPago = pagado >= total ? 'pagada' : 'pendiente';
 
         const ins = await t.get(SQL.insertVenta,
           [
-            numero, tipoDoc, hoy(), sucursalId, formaPago, clienteId, total, 0, descuento, pagado, estadoPago,
+            numero, tipoDoc, hoy(), sucursalId, formaPagoVenta, clienteId, total, 0, descuento, pagado, estadoPago,
             perfilFiscal ? perfilFiscal.timbrado : '', perfilFiscal ? perfilFiscal.timbrado_vigencia : '',
             perfilFiscal ? perfilFiscal.establecimiento : '', perfilFiscal ? perfilFiscal.punto_expedicion : '',
             perfilFiscal ? negocioFiscal.nombre_negocio : '', perfilFiscal ? negocioFiscal.ruc : '',
@@ -813,6 +1148,10 @@ app.post('/api/ventas', h(async (req, res) => {
             perfilFiscal ? clienteFiscal.nombre : '', perfilFiscal ? clienteFiscal.documento : '',
             perfilFiscal ? clienteFiscal.tipo_documento : '',
           ]);
+        for (const pago of pagos) {
+          await t.run(`INSERT INTO venta_pagos (venta_id, forma_pago, monto) VALUES ($1,$2,$3)`,
+            [ins.id, pago.forma_pago, pago.monto]);
+        }
         let descuentoRestante = descuento;
         for (let i = 0; i < detalles.length; i++) {
           const d = detalles[i];
@@ -826,14 +1165,17 @@ app.post('/api/ventas', h(async (req, res) => {
           const montoIva = tasa === null ? 0 : importeNeto - baseIva;
           await t.run(SQL.insertDetalle, [
             ins.id, d.producto.id, d.cantidad, d.precio, 0, d.producto.nombre,
-            tasa, baseIva, montoIva, descuentoLinea,
+            tasa, baseIva, montoIva, descuentoLinea, d.importe,
           ]);
         }
 
-        // A la caja entra el dinero cobrado, no la deuda pendiente.
-        if (pagado > 0) {
+        // El efectivo afecta la caja física; los otros medios se concilian aparte.
+        const efectivo = formaPagoVenta === 'credito'
+          ? pagado
+          : (pagos.find((p) => p.forma_pago === 'efectivo') || {}).monto || 0;
+        if (efectivo > 0) {
           const concepto = pagado < total ? `Venta N° ${numero} (abono)` : `Venta N° ${numero}`;
-          await t.run(SQL.insertMovimiento, [cajaHoy.id, 'ingreso', concepto, pagado, hoy()]);
+          await t.run(SQL.insertMovimiento, [cajaHoy.id, 'ingreso', concepto, efectivo, hoy()]);
         }
         if (formaPago === 'credito' && pagado > 0) {
           await t.run(`INSERT INTO abonos (venta_id, cliente_id, sucursal_id, caja_id, monto, fecha, creado_en)
@@ -844,6 +1186,7 @@ app.post('/api/ventas', h(async (req, res) => {
         return {
           venta_id: ins.id, numero_comprobante: numero, tipo: tipoDoc,
           subtotal, descuento, total, pagado, saldo: Math.max(0, total - pagado), estado_pago: estadoPago,
+          forma_pago: formaPagoVenta, pagos,
         };
       });
       break;
@@ -864,6 +1207,8 @@ app.get('/api/ventas', h(async (req, res) => {
   const params = suc ? [fecha, suc] : [fecha];
   res.json(await db.all(`
     SELECT v.*, COALESCE(s.nombre,'') AS sucursal_nombre,
+           COALESCE((SELECT json_agg(json_build_object('forma_pago', vp.forma_pago, 'monto', vp.monto))
+             FROM venta_pagos vp WHERE vp.venta_id = v.id), '[]'::json) AS pagos,
            (v.total - v.pagado) AS saldo,
            c.nombre AS cliente_nombre, c.documento AS cliente_documento FROM ventas v
     LEFT JOIN sucursales s ON s.id = v.sucursal_id
@@ -899,8 +1244,16 @@ app.get('/api/ventas/consulta', h(async (req, res) => {
   if (['ticket', 'factura'].includes(req.query.tipo)) agregarCondicion('v.tipo = ?', req.query.tipo);
   if (req.query.estado === 'vigentes') condiciones.push('v.anulada = 0');
   else if (req.query.estado === 'anuladas') condiciones.push('v.anulada = 1');
-  if (['efectivo', 'transferencia', 'tarjeta', 'credito'].includes(req.query.forma_pago)) {
-    agregarCondicion('v.forma_pago = ?', req.query.forma_pago);
+  if (['efectivo', 'transferencia', 'tarjeta', 'credito', 'mixto'].includes(req.query.forma_pago)) {
+    params.push(req.query.forma_pago);
+    const ref = `$${params.length}`;
+    if (['efectivo', 'transferencia', 'tarjeta'].includes(req.query.forma_pago)) {
+      condiciones.push(`(v.forma_pago = ${ref} OR EXISTS (
+        SELECT 1 FROM venta_pagos vp WHERE vp.venta_id = v.id AND vp.forma_pago = ${ref}
+      ))`);
+    } else {
+      condiciones.push(`v.forma_pago = ${ref}`);
+    }
   }
   const busqueda = str(req.query.q, 100);
   if (busqueda) {
@@ -925,6 +1278,8 @@ app.get('/api/ventas/consulta', h(async (req, res) => {
     `, params),
     db.all(`
       SELECT v.*, COALESCE(s.nombre,'') AS sucursal_nombre,
+             COALESCE((SELECT json_agg(json_build_object('forma_pago', vp.forma_pago, 'monto', vp.monto))
+               FROM venta_pagos vp WHERE vp.venta_id = v.id), '[]'::json) AS pagos,
              (v.total - v.pagado) AS saldo,
              c.nombre AS cliente_nombre, c.documento AS cliente_documento
       FROM ventas v
@@ -955,7 +1310,8 @@ app.get('/api/ventas/:id', h(async (req, res) => {
     SELECT vd.*, COALESCE(NULLIF(vd.nombre_producto, ''), p.nombre) AS nombre, p.unidad FROM venta_detalles vd
     JOIN productos p ON p.id = vd.producto_id WHERE vd.venta_id = $1
   `, [v.id]);
-  res.json({ ...v, detalles });
+  const pagos = await db.all(`SELECT forma_pago, monto FROM venta_pagos WHERE venta_id = $1 ORDER BY forma_pago`, [v.id]);
+  res.json({ ...v, detalles, pagos });
 }));
 
 app.post('/api/ventas/:id/anular', h(async (req, res) => {
@@ -964,21 +1320,46 @@ app.post('/api/ventas/:id/anular', h(async (req, res) => {
   if (req.sesion.sucursal_id && v.sucursal_id !== req.sesion.sucursal_id) {
     return res.status(403).json({ error: 'No podés anular ventas de otra sucursal' });
   }
+  const motivo = str(req.body?.motivo, 250) || 'Sin motivo especificado';
   await db.transakt(async (t) => {
-    await t.run(`UPDATE ventas SET anulada = 1 WHERE id = $1`, [v.id]);
+    await t.run(
+      `UPDATE ventas
+       SET anulada = 1, motivo_anulacion = $1, anulado_por = $2, anulado_por_usuario = $3, anulado_en = NOW()
+       WHERE id = $4`,
+      [motivo, req.sesion ? req.sesion.id : null, req.sesion ? req.sesion.usuario : '', v.id]
+    );
     const detalles = await t.all(`SELECT * FROM venta_detalles WHERE venta_id = $1`, [v.id]);
     for (const d of detalles) {
       await t.run(`UPDATE productos SET stock = stock + $1 WHERE id = $2`, [d.cantidad, d.producto_id]);
     }
-    const caja = await t.get(SQL.cajaAbiertaFechaSucursal, [v.fecha, v.sucursal_id]);
+    const caja = await t.get(`${SQL.cajaAbiertaFechaSucursal} FOR UPDATE`, [v.fecha, v.sucursal_id]);
     if (caja) {
-      // Solo se devuelve el dinero que realmente entró a la caja; en una venta
-      // a crédito el resto nunca se cobró (la deuda desaparece al anular).
-      const devuelto = Number.isFinite(v.pagado) ? v.pagado : v.total;
+      const pagosEfectivo = await t.get(`SELECT COALESCE(SUM(monto), 0)::float8 AS total
+        FROM venta_pagos WHERE venta_id = $1 AND forma_pago = 'efectivo'`, [v.id]);
+      const abonosEfectivo = v.forma_pago === 'credito'
+        ? await t.get(`SELECT COALESCE(SUM(monto), 0)::float8 AS total FROM abonos WHERE venta_id = $1`, [v.id])
+        : { total: 0 };
+      const devuelto = Math.min(Number(v.pagado) || 0,
+        (Number(pagosEfectivo.total) || 0) + (Number(abonosEfectivo.total) || 0));
       if (devuelto > 0) {
         await t.run(SQL.insertMovimiento, [caja.id, 'egreso', `Anulación Venta N° ${v.numero_comprobante}`, devuelto, hoy()]);
       }
     }
+    await registrarAuditoria(t, {
+      usuarioId: req.sesion ? req.sesion.id : null,
+      usuarioNombre: req.sesion ? req.sesion.usuario : 'sistema',
+      sucursalId: v.sucursal_id,
+      accion: 'anular_venta',
+      entidadTipo: 'venta',
+      entidadId: v.id,
+      detalles: {
+        numero_comprobante: v.numero_comprobante,
+        tipo: v.tipo,
+        total: v.total,
+        forma_pago: v.forma_pago,
+      },
+      motivo,
+    });
   });
   res.json({ ok: true });
 }));
@@ -1082,7 +1463,7 @@ app.post('/api/creditos/abonar', h(async (req, res) => {
     if (saldo <= 0) throw bErr('Esta venta ya está pagada');
     if (monto > saldo + 0.009) throw bErr(`El abono no puede superar el saldo pendiente (${saldo})`);
 
-    const caja = await t.get(SQL.cajaAbiertaFechaSucursal, [hoy(), v.sucursal_id]);
+    const caja = await t.get(`${SQL.cajaAbiertaFechaSucursal} FOR UPDATE`, [hoy(), v.sucursal_id]);
     if (!caja) throw bErr('Abrí la caja de hoy para registrar el abono');
 
     const pagado = v.pagado + monto;
@@ -1108,10 +1489,8 @@ app.get('/api/caja', h(async (req, res) => {
   const sucursalId = sucursalOperativa(req);
   const caja = await db.get(`SELECT * FROM cajas WHERE fecha = $1 AND sucursal_id = $2`, [hoy(), sucursalId]);
   if (!caja) return res.json(null);
-  const movs = await db.all(`SELECT * FROM movimientos_caja WHERE caja_id = $1 ORDER BY id`, [caja.id]);
-  const ingresos = movs.filter(m => m.tipo === 'ingreso').reduce((a, m) => a + m.monto, 0);
-  const egresos = movs.filter(m => m.tipo === 'egreso').reduce((a, m) => a + m.monto, 0);
-  res.json({ ...caja, movimientos: movs, total_ingresos: ingresos, total_egresos: egresos });
+  const [movs, resumen] = await Promise.all([movimientosCaja(caja), resumenPagosCaja(caja)]);
+  res.json({ ...caja, movimientos: movs, ...resumen });
 }));
 
 // Cajas de días anteriores que quedaron abiertas porque nadie las cerró.
@@ -1120,11 +1499,26 @@ app.get('/api/caja/pendientes', h(async (req, res) => {
   const sucursalId = sucursalOperativa(req);
   res.json(await db.all(`
     SELECT c.id, c.fecha, c.apertura,
-      COALESCE(SUM(CASE WHEN m.tipo = 'ingreso' THEN m.monto END), 0) AS ingresos,
-      COALESCE(SUM(CASE WHEN m.tipo = 'egreso' THEN m.monto END), 0) AS egresos
-    FROM cajas c LEFT JOIN movimientos_caja m ON m.caja_id = c.id
+      COALESCE((
+        SELECT SUM(vp.monto) FROM venta_pagos vp
+        JOIN ventas v ON v.id = vp.venta_id
+        WHERE v.fecha = c.fecha AND v.sucursal_id = c.sucursal_id AND vp.forma_pago = 'efectivo'
+      ), 0) + COALESCE((SELECT SUM(a.monto) FROM abonos a WHERE a.caja_id = c.id), 0)
+        + COALESCE((SELECT SUM(m.monto) FROM movimientos_caja m WHERE m.caja_id = c.id AND m.tipo = 'ingreso' AND NOT (m.concepto LIKE 'Venta N° %')), 0) AS ingresos,
+      COALESCE((
+        SELECT SUM(vp.monto) FROM venta_pagos vp
+        JOIN ventas v ON v.id = vp.venta_id
+        WHERE v.fecha = c.fecha AND v.sucursal_id = c.sucursal_id AND v.anulada = 0 AND vp.forma_pago = 'transferencia'
+      ), 0) AS transferencias,
+      COALESCE((
+        SELECT SUM(vp.monto) FROM venta_pagos vp
+        JOIN ventas v ON v.id = vp.venta_id
+        WHERE v.fecha = c.fecha AND v.sucursal_id = c.sucursal_id AND v.anulada = 0 AND vp.forma_pago = 'tarjeta'
+      ), 0) AS tarjetas,
+      COALESCE((SELECT SUM(m.monto) FROM movimientos_caja m WHERE m.caja_id = c.id AND m.tipo = 'egreso'), 0) AS egresos
+    FROM cajas c
     WHERE c.sucursal_id = $1 AND c.fecha < $2 AND c.estado = 'abierta'
-    GROUP BY c.id ORDER BY c.fecha
+    ORDER BY c.fecha
   `, [sucursalId, hoy()]));
 }));
 
@@ -1134,13 +1528,28 @@ app.get('/api/cajas', h(async (req, res) => {
   const params = suc ? [suc] : [];
   res.json(await db.all(`
     SELECT c.*, COALESCE(s.nombre,'') AS sucursal_nombre,
-      COALESCE(SUM(CASE WHEN m.tipo = 'ingreso' THEN m.monto END), 0) AS ingresos,
-      COALESCE(SUM(CASE WHEN m.tipo = 'egreso' THEN m.monto END), 0) AS egresos,
-      COUNT(m.id) AS cant_movs
-    FROM cajas c LEFT JOIN movimientos_caja m ON m.caja_id = c.id
+      COALESCE((
+        SELECT SUM(vp.monto) FROM venta_pagos vp
+        JOIN ventas v ON v.id = vp.venta_id
+        WHERE v.fecha = c.fecha AND v.sucursal_id = c.sucursal_id AND vp.forma_pago = 'efectivo'
+      ), 0) + COALESCE((SELECT SUM(a.monto) FROM abonos a WHERE a.caja_id = c.id), 0)
+        + COALESCE((SELECT SUM(m.monto) FROM movimientos_caja m WHERE m.caja_id = c.id AND m.tipo = 'ingreso' AND NOT (m.concepto LIKE 'Venta N° %')), 0) AS ingresos,
+      COALESCE((
+        SELECT SUM(vp.monto) FROM venta_pagos vp
+        JOIN ventas v ON v.id = vp.venta_id
+        WHERE v.fecha = c.fecha AND v.sucursal_id = c.sucursal_id AND v.anulada = 0 AND vp.forma_pago = 'transferencia'
+      ), 0) AS transferencias,
+      COALESCE((
+        SELECT SUM(vp.monto) FROM venta_pagos vp
+        JOIN ventas v ON v.id = vp.venta_id
+        WHERE v.fecha = c.fecha AND v.sucursal_id = c.sucursal_id AND v.anulada = 0 AND vp.forma_pago = 'tarjeta'
+      ), 0) AS tarjetas,
+      COALESCE((SELECT SUM(m.monto) FROM movimientos_caja m WHERE m.caja_id = c.id AND m.tipo = 'egreso'), 0) AS egresos,
+      (SELECT COUNT(*) FROM movimientos_caja m WHERE m.caja_id = c.id) AS cant_movs
+    FROM cajas c
     LEFT JOIN sucursales s ON s.id = c.sucursal_id
     ${cond}
-    GROUP BY c.id, s.nombre ORDER BY c.fecha DESC
+    ORDER BY c.fecha DESC
   `, params));
 }));
 
@@ -1150,10 +1559,8 @@ app.get('/api/cajas/:id', h(async (req, res) => {
   if (req.sesion.sucursal_id && caja.sucursal_id !== req.sesion.sucursal_id) {
     return res.status(403).json({ error: 'No podés ver cajas de otra sucursal' });
   }
-  const movs = await db.all(`SELECT * FROM movimientos_caja WHERE caja_id = $1 ORDER BY id`, [caja.id]);
-  const ingresos = movs.filter(m => m.tipo === 'ingreso').reduce((a, m) => a + m.monto, 0);
-  const egresos = movs.filter(m => m.tipo === 'egreso').reduce((a, m) => a + m.monto, 0);
-  res.json({ ...caja, movimientos: movs, total_ingresos: ingresos, total_egresos: egresos });
+  const [movs, resumen] = await Promise.all([movimientosCaja(caja), resumenPagosCaja(caja)]);
+  res.json({ ...caja, movimientos: movs, ...resumen });
 }));
 
 app.post('/api/cajas/:id/reabrir', h(async (req, res) => {
@@ -1163,7 +1570,30 @@ app.post('/api/cajas/:id/reabrir', h(async (req, res) => {
     return res.status(403).json({ error: 'No podés reabrir cajas de otra sucursal' });
   }
   if (caja.estado === 'abierta') return res.status(400).json({ error: 'La caja ya está abierta' });
-  await db.run(`UPDATE cajas SET estado = 'abierta', cierre_esperado = NULL, cierre_real = NULL, diferencia = NULL WHERE id = $1`, [caja.id]);
+  const motivo = str(req.body?.motivo, 250) || 'Reapertura de caja';
+  await db.transakt(async (t) => {
+    await t.run(
+      `UPDATE cajas SET estado = 'abierta', cierre_esperado = NULL, cierre_real = NULL, diferencia = NULL,
+       cierre_denominaciones = NULL, motivo_reapertura = $1, reabierto_por = $2, reabierto_por_usuario = $3,
+       reabierto_en = NOW() WHERE id = $4`,
+      [motivo, req.sesion ? req.sesion.id : null, req.sesion ? req.sesion.usuario : '', caja.id]
+    );
+    await registrarAuditoria(t, {
+      usuarioId: req.sesion ? req.sesion.id : null,
+      usuarioNombre: req.sesion ? req.sesion.usuario : 'sistema',
+      sucursalId: caja.sucursal_id,
+      accion: 'reabrir_caja',
+      entidadTipo: 'caja',
+      entidadId: caja.id,
+      detalles: {
+        fecha: caja.fecha,
+        cierre_real_previo: caja.cierre_real,
+        cierre_esperado_previo: caja.cierre_esperado,
+        diferencia_previa: caja.diferencia,
+      },
+      motivo,
+    });
+  });
   res.json({ ok: true });
 }));
 
@@ -1182,43 +1612,37 @@ app.post('/api/caja/abrir', h(async (req, res) => {
   });
 }));
 
-app.post('/api/caja/egreso', h(async (req, res) => {
-  const concepto = str(req.body.concepto, 150);
-  const monto = num(req.body.monto, 0.01, 1e12, null);
-  if (!concepto || monto === null) return res.status(400).json({ error: 'Ingresá concepto y monto válido' });
-  const sucursalId = sucursalOperativa(req);
-  const cajaId = entero(req.body.caja_id, 1, null);
-  const caja = cajaId
-    ? await db.get(`SELECT * FROM cajas WHERE id = $1 AND estado = 'abierta'`, [cajaId])
-    : await q.cajaAbiertaFechaSucursal(hoy(), sucursalId);
-  if (!caja) return res.status(400).json({ error: 'No hay caja abierta' });
-  if (req.sesion.sucursal_id && caja.sucursal_id !== req.sesion.sucursal_id) {
-    return res.status(403).json({ error: 'No podés operar la caja de otra sucursal' });
-  }
-  await db.run(SQL.insertMovimiento, [caja.id, 'egreso', concepto, monto, hoy()]);
-  res.json({ ok: true });
-}));
-
 app.post('/api/caja/cerrar', h(async (req, res) => {
-  const cierreReal = num(req.body.cierre_real, 0, 1e12, null);
-  if (cierreReal === null) return res.status(400).json({ error: 'Ingresá el cierre real' });
+  const arqueo = req.body.denominaciones === undefined ? null : validarDenominaciones(req.body.denominaciones);
+  if (req.body.denominaciones !== undefined && !arqueo) {
+    return res.status(400).json({ error: 'El conteo de billetes y monedas no es válido' });
+  }
+  const cierreReal = arqueo ? arqueo.total : num(req.body.cierre_real, 0, 1e12, null);
+  if (cierreReal === null) return res.status(400).json({ error: 'Ingresá el cierre contando billetes y monedas' });
   const sucursalId = sucursalOperativa(req);
   const cajaId = entero(req.body.caja_id, 1, null);
-  const caja = cajaId
-    ? await db.get(`SELECT * FROM cajas WHERE id = $1 AND estado = 'abierta'`, [cajaId])
-    : await q.cajaAbiertaFechaSucursal(hoy(), sucursalId);
-  if (!caja) return res.status(400).json({ error: 'No hay caja abierta' });
-  if (req.sesion.sucursal_id && caja.sucursal_id !== req.sesion.sucursal_id) {
-    return res.status(403).json({ error: 'No podés operar la caja de otra sucursal' });
-  }
-  const movs = await db.all(`SELECT * FROM movimientos_caja WHERE caja_id = $1`, [caja.id]);
-  const ingresos = movs.filter(m => m.tipo === 'ingreso').reduce((a, m) => a + m.monto, 0);
-  const egresos = movs.filter(m => m.tipo === 'egreso').reduce((a, m) => a + m.monto, 0);
-  const esperado = caja.apertura + ingresos - egresos;
-  const diferencia = cierreReal - esperado;
-  await db.run(`UPDATE cajas SET cierre_esperado = $1, cierre_real = $2, diferencia = $3, estado = 'cerrada' WHERE id = $4`,
-    [esperado, cierreReal, diferencia, caja.id]);
-  res.json({ esperado, diferencia, apertura: caja.apertura, ingresos, egresos, cant_movs: movs.length });
+  const resultado = await db.transakt(async (t) => {
+    const caja = cajaId
+      ? await t.get(`SELECT * FROM cajas WHERE id = $1 AND estado = 'abierta' FOR UPDATE`, [cajaId])
+      : await t.get(`${SQL.cajaAbiertaFechaSucursal} FOR UPDATE`, [hoy(), sucursalId]);
+    if (!caja) throw bErr('No hay caja abierta');
+    if (req.sesion.sucursal_id && caja.sucursal_id !== req.sesion.sucursal_id) {
+      throw bErr('No podés operar la caja de otra sucursal', 403);
+    }
+    const resumen = await resumenPagosCaja(caja, t);
+    const esperado = caja.apertura + resumen.total_efectivo - resumen.total_egresos;
+    const diferencia = cierreReal - esperado;
+    await t.run(`UPDATE cajas SET cierre_esperado = $1, cierre_real = $2, diferencia = $3,
+                 cierre_denominaciones = $4::jsonb, estado = 'cerrada' WHERE id = $5`,
+      [esperado, cierreReal, diferencia, arqueo ? JSON.stringify(arqueo.conteo) : null, caja.id]);
+    return {
+      esperado, cierre_real: cierreReal, diferencia, apertura: caja.apertura,
+      ingresos: resumen.total_efectivo, egresos: resumen.total_egresos,
+      transferencias: resumen.total_transferencia, tarjetas: resumen.total_tarjeta,
+      denominaciones: arqueo ? arqueo.conteo : null,
+    };
+  });
+  res.json(resultado);
 }));
 
 // ================= EXPORTACIÓN (versión completa) =================
@@ -1301,6 +1725,52 @@ app.get('/api/exportar/:tipo', h(async (req, res) => {
   res.set('Content-Type', 'text/csv; charset=utf-8');
   res.set('Content-Disposition', `attachment; filename="${tipo}-${hoy()}.csv"`);
   res.send(aCsv(filas, columnas));
+}));
+
+// ================= AUDITORÍA (solo dueño) =================
+
+app.get('/api/auditoria', soloDueño('Solo el dueño puede ver la auditoría del negocio'), h(async (req, res) => {
+  const sucursalId = entero(req.query.sucursal_id, 1, null);
+  const accion = str(req.query.accion, 50);
+  const desde = fechaValida(req.query.desde) ? req.query.desde : null;
+  const hasta = fechaValida(req.query.hasta) ? req.query.hasta : null;
+  const pagina = entero(req.query.pagina, 1, 1);
+  const limite = entero(req.query.limite, 1, 50);
+
+  const condiciones = [];
+  const params = [];
+  const agregar = (sql, val) => {
+    params.push(val);
+    condiciones.push(sql.replace('?', `$${params.length}`));
+  };
+
+  if (sucursalId) agregar('a.sucursal_id = ?', sucursalId);
+  if (accion && ['anular_venta', 'reabrir_caja', 'cambio_precio'].includes(accion)) agregar('a.accion = ?', accion);
+  if (desde) agregar('a.fecha >= (?::date)', desde);
+  if (hasta) agregar('a.fecha <= (?::date + INTERVAL \'1 day\')', hasta);
+
+  const where = condiciones.length ? `WHERE ${condiciones.join(' AND ')}` : '';
+  const cuenta = await db.get(`SELECT COUNT(*)::int AS total FROM auditoria a ${where}`, params);
+  const total = cuenta ? cuenta.total : 0;
+
+  const offset = (pagina - 1) * limite;
+  const items = await db.all(`
+    SELECT a.*, COALESCE(s.nombre, 'Todas / Global') AS sucursal_nombre
+    FROM auditoria a
+    LEFT JOIN sucursales s ON s.id = a.sucursal_id
+    ${where}
+    ORDER BY a.id DESC
+    LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+  `, [...params, limite, offset]);
+
+  res.json({
+    total,
+    pagina,
+    limite,
+    paginas: Math.ceil(total / limite) || 1,
+    items,
+    registros: items,
+  });
 }));
 
 // ================= DEMO =================

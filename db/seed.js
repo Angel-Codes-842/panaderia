@@ -16,7 +16,7 @@ const int = (min, max) => Math.floor(rand() * (max - min + 1)) + min;
 async function reset() {
   // usuarios, sesiones y licencia NO se borran: restablecer la demo no debe
   // resetear la contraseña ni cerrar sesiones ni tocar el estado de la licencia.
-  await db.run(`TRUNCATE TABLE abonos, lotes, venta_detalles, ventas, movimientos_caja, gastos, cajas, productos, clientes RESTART IDENTITY CASCADE`);
+  await db.run(`TRUNCATE TABLE auditoria, abonos, receta_insumos, recetas, insumos, lotes, venta_detalles, ventas, movimientos_caja, gastos, cajas, productos, clientes RESTART IDENTITY CASCADE`);
   await auth.limpiarSesionesVencidas();
 }
 
@@ -117,8 +117,10 @@ async function hacerSeed() {
         total += prod.precio_venta * cant;
         dets.push([prod.id, cant, prod.precio_venta, 0]);
       }
+      const forma = pick(formas);
       const vid = (await db.get(`INSERT INTO ventas (numero_comprobante, tipo, fecha, forma_pago, cliente_id, total, costo, descuento, pagado, estado_pago) VALUES ($1,$2,$3,$4,$5,$6,$7,0,$6,'pagada') RETURNING id`,
-        [numero, tipo, fecha, pick(formas), conCliente ? pick(clienteIds) : null, total, 0])).id;
+        [numero, tipo, fecha, forma, conCliente ? pick(clienteIds) : null, total, 0])).id;
+      await db.run(`INSERT INTO venta_pagos (venta_id, forma_pago, monto) VALUES ($1,$2,$3)`, [vid, forma, total]);
       for (const d of dets) await db.run(`INSERT INTO venta_detalles (venta_id, producto_id, cantidad, precio, costo) VALUES ($1,$2,$3,$4,$5)`, [vid, ...d]);
       totalDia += total;
     }

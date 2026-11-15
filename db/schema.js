@@ -85,6 +85,23 @@ CREATE TABLE IF NOT EXISTS sucursales (
   activa SMALLINT NOT NULL DEFAULT 1
 );
 
+CREATE TABLE IF NOT EXISTS usuarios (
+  id BIGSERIAL PRIMARY KEY,
+  usuario TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  salt TEXT NOT NULL,
+  sucursal_id BIGINT,
+  activo SMALLINT NOT NULL DEFAULT 1,
+  creado_en TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sesiones (
+  token TEXT PRIMARY KEY,
+  usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  creada TEXT NOT NULL,
+  expira TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS productos (
   id BIGSERIAL PRIMARY KEY,
   nombre TEXT NOT NULL,
@@ -93,6 +110,29 @@ CREATE TABLE IF NOT EXISTS productos (
   precio_venta DOUBLE PRECISION NOT NULL DEFAULT 0,
   stock DOUBLE PRECISION NOT NULL DEFAULT 0,
   activo SMALLINT NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS insumos (
+  id BIGSERIAL PRIMARY KEY,
+  nombre TEXT NOT NULL,
+  unidad_base TEXT NOT NULL CHECK (unidad_base IN ('kg', 'l', 'unidad')),
+  costo_unitario DOUBLE PRECISION NOT NULL DEFAULT 0 CHECK (costo_unitario >= 0),
+  activo SMALLINT NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS recetas (
+  producto_id BIGINT PRIMARY KEY REFERENCES productos(id),
+  rendimiento DOUBLE PRECISION NOT NULL CHECK (rendimiento > 0),
+  margen DOUBLE PRECISION NOT NULL DEFAULT 40 CHECK (margen >= 0),
+  actualizado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS receta_insumos (
+  id BIGSERIAL PRIMARY KEY,
+  producto_id BIGINT NOT NULL REFERENCES recetas(producto_id) ON DELETE CASCADE,
+  insumo_id BIGINT NOT NULL REFERENCES insumos(id),
+  cantidad DOUBLE PRECISION NOT NULL CHECK (cantidad > 0),
+  unidad TEXT NOT NULL CHECK (unidad IN ('kg', 'g', 'l', 'ml', 'unidad'))
 );
 
 -- Código opcional para buscar o escanear en el punto de venta. Solo es único
@@ -179,6 +219,17 @@ ALTER TABLE ventas ADD COLUMN IF NOT EXISTS emisor_ciudad TEXT NOT NULL DEFAULT 
 ALTER TABLE ventas ADD COLUMN IF NOT EXISTS cliente_nombre_snapshot TEXT NOT NULL DEFAULT '';
 ALTER TABLE ventas ADD COLUMN IF NOT EXISTS cliente_documento_snapshot TEXT NOT NULL DEFAULT '';
 ALTER TABLE ventas ADD COLUMN IF NOT EXISTS cliente_tipo_documento_snapshot TEXT NOT NULL DEFAULT '';
+ALTER TABLE ventas ADD COLUMN IF NOT EXISTS motivo_anulacion TEXT NOT NULL DEFAULT '';
+ALTER TABLE ventas ADD COLUMN IF NOT EXISTS anulado_por BIGINT REFERENCES usuarios(id);
+ALTER TABLE ventas ADD COLUMN IF NOT EXISTS anulado_por_usuario TEXT NOT NULL DEFAULT '';
+ALTER TABLE ventas ADD COLUMN IF NOT EXISTS anulado_en TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS venta_pagos (
+  venta_id BIGINT NOT NULL REFERENCES ventas(id) ON DELETE CASCADE,
+  forma_pago TEXT NOT NULL CHECK (forma_pago IN ('efectivo', 'transferencia', 'tarjeta')),
+  monto DOUBLE PRECISION NOT NULL CHECK (monto > 0),
+  PRIMARY KEY (venta_id, forma_pago)
+);
 
 CREATE TABLE IF NOT EXISTS venta_detalles (
   id BIGSERIAL PRIMARY KEY,
@@ -193,6 +244,10 @@ ALTER TABLE venta_detalles ADD COLUMN IF NOT EXISTS iva_tasa SMALLINT;
 ALTER TABLE venta_detalles ADD COLUMN IF NOT EXISTS iva_base DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE venta_detalles ADD COLUMN IF NOT EXISTS iva_monto DOUBLE PRECISION NOT NULL DEFAULT 0;
 ALTER TABLE venta_detalles ADD COLUMN IF NOT EXISTS descuento DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE venta_detalles ADD COLUMN IF NOT EXISTS importe DOUBLE PRECISION;
+UPDATE venta_detalles SET importe = cantidad * precio WHERE importe IS NULL;
+ALTER TABLE venta_detalles ALTER COLUMN importe SET DEFAULT 0;
+ALTER TABLE venta_detalles ALTER COLUMN importe SET NOT NULL;
 
 CREATE TABLE IF NOT EXISTS cajas (
   id BIGSERIAL PRIMARY KEY,
@@ -202,8 +257,14 @@ CREATE TABLE IF NOT EXISTS cajas (
   cierre_esperado DOUBLE PRECISION,
   cierre_real DOUBLE PRECISION,
   diferencia DOUBLE PRECISION,
+  cierre_denominaciones JSONB,
   estado TEXT NOT NULL DEFAULT 'abierta'
 );
+ALTER TABLE cajas ADD COLUMN IF NOT EXISTS cierre_denominaciones JSONB;
+ALTER TABLE cajas ADD COLUMN IF NOT EXISTS motivo_reapertura TEXT NOT NULL DEFAULT '';
+ALTER TABLE cajas ADD COLUMN IF NOT EXISTS reabierto_por BIGINT REFERENCES usuarios(id);
+ALTER TABLE cajas ADD COLUMN IF NOT EXISTS reabierto_por_usuario TEXT NOT NULL DEFAULT '';
+ALTER TABLE cajas ADD COLUMN IF NOT EXISTS reabierto_en TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS movimientos_caja (
   id BIGSERIAL PRIMARY KEY,
@@ -237,23 +298,6 @@ CREATE TABLE IF NOT EXISTS gastos (
   caja_id BIGINT REFERENCES cajas(id)
 );
 
-CREATE TABLE IF NOT EXISTS usuarios (
-  id BIGSERIAL PRIMARY KEY,
-  usuario TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  salt TEXT NOT NULL,
-  sucursal_id BIGINT,
-  activo SMALLINT NOT NULL DEFAULT 1,
-  creado_en TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS sesiones (
-  token TEXT PRIMARY KEY,
-  usuario_id BIGINT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
-  creada TEXT NOT NULL,
-  expira TEXT NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS licencia (
   id BIGINT PRIMARY KEY CHECK (id = 1),
   modo TEXT NOT NULL DEFAULT 'prueba',
@@ -261,6 +305,19 @@ CREATE TABLE IF NOT EXISTS licencia (
   fin TEXT NOT NULL,
   codigo_prueba TEXT NOT NULL,
   codigo_comprado TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auditoria (
+  id BIGSERIAL PRIMARY KEY,
+  fecha TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  usuario_id BIGINT REFERENCES usuarios(id),
+  usuario_nombre TEXT NOT NULL DEFAULT '',
+  sucursal_id BIGINT REFERENCES sucursales(id),
+  accion TEXT NOT NULL,
+  entidad_tipo TEXT NOT NULL,
+  entidad_id BIGINT,
+  detalles JSONB,
+  motivo TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -277,6 +334,7 @@ CREATE INDEX IF NOT EXISTS idx_ventas_sucursal ON ventas(sucursal_id);
 CREATE INDEX IF NOT EXISTS idx_ventas_cliente ON ventas(cliente_id);
 CREATE INDEX IF NOT EXISTS idx_venta_detalles_venta ON venta_detalles(venta_id);
 CREATE INDEX IF NOT EXISTS idx_venta_detalles_producto ON venta_detalles(producto_id);
+CREATE INDEX IF NOT EXISTS idx_venta_pagos_venta ON venta_pagos(venta_id);
 CREATE INDEX IF NOT EXISTS idx_movimientos_caja_caja ON movimientos_caja(caja_id);
 CREATE INDEX IF NOT EXISTS idx_gastos_fecha ON gastos(fecha);
 CREATE INDEX IF NOT EXISTS idx_gastos_sucursal_fecha ON gastos(sucursal_id, fecha);
@@ -288,6 +346,9 @@ CREATE INDEX IF NOT EXISTS idx_sesiones_expira ON sesiones(expira);
 CREATE INDEX IF NOT EXISTS idx_abonos_venta ON abonos(venta_id);
 CREATE INDEX IF NOT EXISTS idx_abonos_cliente ON abonos(cliente_id);
 CREATE INDEX IF NOT EXISTS idx_ventas_credito ON ventas(cliente_id) WHERE anulada = 0;
+CREATE INDEX IF NOT EXISTS idx_auditoria_fecha ON auditoria(fecha DESC);
+CREATE INDEX IF NOT EXISTS idx_auditoria_sucursal ON auditoria(sucursal_id);
+CREATE INDEX IF NOT EXISTS idx_auditoria_accion ON auditoria(accion);
 `;
 
 // Crea el esquema (idempotente) y las filas base. Se llama una vez al arrancar.
@@ -311,6 +372,15 @@ async function migrar() {
 
   // Ventas anteriores a esta versión se cobraron completas.
   if (primeraVez.pagado) await db.run(`UPDATE ventas SET pagado = total, estado_pago = 'pagada'`);
+
+  await db.run(`
+    INSERT INTO venta_pagos (venta_id, forma_pago, monto)
+    SELECT id, forma_pago, pagado
+    FROM ventas
+    WHERE forma_pago IN ('efectivo', 'transferencia', 'tarjeta') AND pagado > 0
+    ON CONFLICT (venta_id, forma_pago) DO NOTHING
+  `);
+
   // Retirar una sola vez los códigos sintéticos que generaban versiones anteriores.
   const codigoMigrado = await db.get(`SELECT version FROM schema_migrations WHERE version = 8`);
   if (!codigoMigrado) {
