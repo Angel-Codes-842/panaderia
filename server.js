@@ -388,39 +388,135 @@ app.put('/api/usuarios/:id', requireDueño, h(async (req, res) => {
 
 // ================= GASTOS =================
 
-const CATEGORIAS_GASTO = ['Sueldos', 'Servicios', 'Insumos varios', 'Mantenimiento', 'Otros'];
+// ================= PROVEEDORES =================
+
+app.get('/api/proveedores', h(async (_req, res) => {
+  res.json(await db.all(`SELECT * FROM proveedores WHERE activo = 1 ORDER BY nombre ASC`));
+}));
+
+app.post('/api/proveedores', h(async (req, res) => {
+  const nombre = str(req.body.nombre, 100);
+  if (!nombre) return res.status(400).json({ error: 'Ingresá el nombre del proveedor' });
+  const contacto = str(req.body.contacto, 100);
+  const telefono = str(req.body.telefono, 40);
+  const ruc = str(req.body.ruc, 30);
+  const rubro = str(req.body.rubro, 60);
+  const direccion = str(req.body.direccion, 150);
+
+  const fila = await db.get(
+    `INSERT INTO proveedores (nombre, contacto, telefono, ruc, rubro, direccion, activo, creado_en)
+     VALUES ($1,$2,$3,$4,$5,$6,1,$7)
+     RETURNING id, nombre, contacto, telefono, ruc, rubro, direccion, activo`,
+    [nombre, contacto, telefono, ruc, rubro, direccion, new Date().toISOString()]
+  );
+  res.json(fila);
+}));
+
+app.put('/api/proveedores/:id', h(async (req, res) => {
+  const id = entero(req.params.id, 1, 0);
+  const proveedor = await db.get(`SELECT * FROM proveedores WHERE id = $1 AND activo = 1`, [id]);
+  if (!proveedor) return res.status(404).json({ error: 'Proveedor no encontrado' });
+  const nombre = str(req.body.nombre, 100);
+  if (!nombre) return res.status(400).json({ error: 'Ingresá el nombre del proveedor' });
+  const contacto = str(req.body.contacto, 100);
+  const telefono = str(req.body.telefono, 40);
+  const ruc = str(req.body.ruc, 30);
+  const rubro = str(req.body.rubro, 60);
+  const direccion = str(req.body.direccion, 150);
+
+  const actualizado = await db.get(
+    `UPDATE proveedores
+     SET nombre = $1, contacto = $2, telefono = $3, ruc = $4, rubro = $5, direccion = $6
+     WHERE id = $7
+     RETURNING id, nombre, contacto, telefono, ruc, rubro, direccion, activo`,
+    [nombre, contacto, telefono, ruc, rubro, direccion, id]
+  );
+  res.json(actualizado);
+}));
+
+app.delete('/api/proveedores/:id', h(async (req, res) => {
+  const id = entero(req.params.id, 1, 0);
+  await db.run(`UPDATE proveedores SET activo = 0 WHERE id = $1`, [id]);
+  res.json({ ok: true });
+}));
+
+// ================= GASTOS =================
+
+const CATEGORIAS_GASTO_VARIOS = ['Servicios', 'Limpieza', 'Mantenimiento', 'Insumos varios', 'Sueldos', 'Viáticos', 'Otros'];
 
 app.get('/api/gastos', h(async (req, res) => {
   const fecha = fechaValida(req.query.fecha);
   const suc = req.sesion.sucursal_id || entero(req.query.sucursal_id, 1, null);
+  const tipo = ['varios', 'proveedor'].includes(req.query.tipo) ? req.query.tipo : null;
+  const provId = entero(req.query.proveedor_id, 1, null);
+
   const where = [];
   const params = [];
   if (fecha) { where.push('g.fecha = $' + (params.length + 1)); params.push(fecha); }
   if (suc) { where.push('g.sucursal_id = $' + (params.length + 1)); params.push(suc); }
-  const sql = `SELECT g.*, COALESCE(s.nombre,'') AS sucursal_nombre FROM gastos g
+  if (tipo) { where.push('g.tipo = $' + (params.length + 1)); params.push(tipo); }
+  if (provId) { where.push('g.proveedor_id = $' + (params.length + 1)); params.push(provId); }
+
+  const sql = `SELECT g.*,
+                      COALESCE(s.nombre,'') AS sucursal_nombre,
+                      COALESCE(p.nombre, '') AS proveedor_nombre,
+                      COALESCE(p.rubro, '') AS proveedor_rubro,
+                      COALESCE(p.telefono, '') AS proveedor_telefono
+               FROM gastos g
                LEFT JOIN sucursales s ON s.id = g.sucursal_id
+               LEFT JOIN proveedores p ON p.id = g.proveedor_id
                ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                ORDER BY g.fecha DESC, g.id DESC`;
   res.json(await db.all(sql, params));
 }));
 
 app.post('/api/gastos', h(async (req, res) => {
+  const tipo = req.body.tipo === 'proveedor' ? 'proveedor' : 'varios';
   const concepto = str(req.body.concepto, 150);
   const monto = num(req.body.monto, 0.01, 1e12, null);
   if (!concepto) return res.status(400).json({ error: 'Ingresá un concepto' });
   if (monto === null) return res.status(400).json({ error: 'Ingresá un monto válido' });
-  const categoria = CATEGORIAS_GASTO.includes(req.body.categoria) ? req.body.categoria : 'Otros';
+
+  const motivo = str(req.body.motivo, 250);
+  const comprobante = str(req.body.comprobante, 60);
+  const formaPago = req.body.forma_pago === 'transferencia' ? 'transferencia' : 'efectivo';
   const fecha = str(req.body.fecha, 10) || hoy();
   const sucursalId = sucursalOperativa(req);
-  const resultado = await db.transakt(async (t) => {
-    const caja = await t.get(`${SQL.cajaAbiertaFechaSucursal} FOR UPDATE`, [fecha, sucursalId]);
-    const cajaId = caja ? caja.id : null;
-    const info = await t.get(
-      `INSERT INTO gastos (concepto, monto, categoria, fecha, sucursal_id, caja_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [concepto, monto, categoria, fecha, sucursalId, cajaId]);
-    if (caja) {
-      await t.run(SQL.insertMovimiento, [caja.id, 'egreso', `Gasto: ${concepto}`, monto, fecha]);
+
+  let proveedorId = null;
+  let categoria = 'Otros';
+
+  if (tipo === 'proveedor') {
+    proveedorId = entero(req.body.proveedor_id, 1, null);
+    if (!proveedorId) {
+      return res.status(400).json({ error: 'Seleccioná un proveedor para el pago' });
     }
+    const prov = await db.get(`SELECT id, nombre, rubro FROM proveedores WHERE id = $1 AND activo = 1`, [proveedorId]);
+    if (!prov) return res.status(400).json({ error: 'El proveedor seleccionado no existe' });
+    categoria = prov.rubro || 'Proveedores';
+  } else {
+    categoria = CATEGORIAS_GASTO_VARIOS.includes(req.body.categoria) ? req.body.categoria : 'Otros';
+  }
+
+  const resultado = await db.transakt(async (t) => {
+    let cajaId = null;
+    // Solo descuenta de caja si la forma de pago es en efectivo de caja
+    if (formaPago === 'efectivo') {
+      const caja = await t.get(`${SQL.cajaAbiertaFechaSucursal} FOR UPDATE`, [fecha, sucursalId]);
+      if (caja) {
+        cajaId = caja.id;
+        const textoConcepto = tipo === 'proveedor'
+          ? `Proveedor: ${concepto}`
+          : `Gasto: ${concepto}`;
+        await t.run(SQL.insertMovimiento, [caja.id, 'egreso', textoConcepto, monto, fecha]);
+      }
+    }
+
+    const info = await t.get(
+      `INSERT INTO gastos (concepto, monto, categoria, fecha, sucursal_id, caja_id, tipo, proveedor_id, motivo, comprobante, forma_pago)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      [concepto, monto, categoria, fecha, sucursalId, cajaId, tipo, proveedorId, motivo, comprobante, formaPago]
+    );
     return { id: info.id };
   });
   res.json(resultado);
@@ -435,10 +531,13 @@ app.delete('/api/gastos/:id', h(async (req, res) => {
   await db.transakt(async (t) => {
     await t.run(`DELETE FROM gastos WHERE id = $1`, [gasto.id]);
     if (gasto.caja_id) {
-      // Revertir el egreso de caja asociado (solo el que corresponde a este gasto)
+      // Revertir el egreso de caja asociado
+      const textoConcepto = gasto.tipo === 'proveedor'
+        ? `Proveedor: ${gasto.concepto}`
+        : `Gasto: ${gasto.concepto}`;
       await t.run(`DELETE FROM movimientos_caja WHERE id = (
         SELECT id FROM movimientos_caja WHERE caja_id = $1 AND concepto = $2 AND monto = $3 AND tipo = 'egreso' LIMIT 1)`,
-        [gasto.caja_id, `Gasto: ${gasto.concepto}`, gasto.monto]);
+        [gasto.caja_id, textoConcepto, gasto.monto]);
       const caja = await t.get(`SELECT * FROM cajas WHERE id = $1`, [gasto.caja_id]);
       if (caja && caja.estado === 'cerrada') {
         const resumen = await resumenPagosCaja(caja, t);
@@ -451,7 +550,7 @@ app.delete('/api/gastos/:id', h(async (req, res) => {
   res.json({ ok: true });
 }));
 
-app.get('/api/gastos/categorias', (_req, res) => res.json(CATEGORIAS_GASTO));
+app.get('/api/gastos/categorias', (_req, res) => res.json(CATEGORIAS_GASTO_VARIOS));
 
 // ================= REPORTES =================
 
@@ -897,10 +996,18 @@ app.put('/api/config', requireDueño, h(async (req, res) => {
     direccion: str(req.body.direccion, 150),
     telefono: str(req.body.telefono, 30),
     ciudad: str(req.body.ciudad, 60),
-    logo: typeof req.body.logo === 'string' ? req.body.logo.slice(0, 500000) : ''
+    logo: typeof req.body.logo === 'string' ? req.body.logo.slice(0, 500000) : '',
+    permitir_venta_sin_stock: req.body.permitir_venta_sin_stock === undefined
+      ? null
+      : (req.body.permitir_venta_sin_stock ? 1 : 0)
   };
-  await db.run(`UPDATE configuracion SET nombre_negocio=$1, ruc=$2, actividad_economica=$3, direccion=$4, telefono=$5, ciudad=$6, logo=$7 WHERE id=1`,
-    [campos.nombre_negocio, campos.ruc, campos.actividad_economica, campos.direccion, campos.telefono, campos.ciudad, campos.logo]);
+  await db.run(
+    `UPDATE configuracion
+     SET nombre_negocio=$1, ruc=$2, actividad_economica=$3, direccion=$4, telefono=$5, ciudad=$6, logo=$7,
+         permitir_venta_sin_stock = COALESCE($8, permitir_venta_sin_stock)
+     WHERE id=1`,
+    [campos.nombre_negocio, campos.ruc, campos.actividad_economica, campos.direccion, campos.telefono, campos.ciudad, campos.logo, campos.permitir_venta_sin_stock]
+  );
   res.json({ ok: true });
 }));
 
@@ -1057,13 +1164,17 @@ app.post('/api/ventas', h(async (req, res) => {
           return { productoId: pid, cantidad, importe };
         });
         const idsProductos = [...new Set(itemsValidados.map((it) => it.productoId))].sort((a, b) => a - b);
-        const productos = await t.all(
-          `SELECT * FROM productos
-           WHERE id = ANY($1::bigint[]) AND activo = 1
-           ORDER BY id
-           FOR UPDATE`,
-          [idsProductos]
-        );
+        const [config, productos] = await Promise.all([
+          t.get(`SELECT permitir_venta_sin_stock FROM configuracion WHERE id = 1`),
+          t.all(
+            `SELECT * FROM productos
+             WHERE id = ANY($1::bigint[]) AND activo = 1
+             ORDER BY id
+             FOR UPDATE`,
+            [idsProductos]
+          ),
+        ]);
+        const permitirVentaSinStock = config ? Number(config.permitir_venta_sin_stock) === 1 : true;
         const productosPorId = new Map(productos.map((p) => [p.id, p]));
         const cantidadesPorProducto = new Map();
         let subtotal = 0;
@@ -1077,7 +1188,7 @@ app.post('/api/ventas', h(async (req, res) => {
           }
           const precio = p.precio_venta;
           const cantidadAcumulada = (cantidadesPorProducto.get(p.id) || 0) + it.cantidad;
-          if (p.stock < cantidadAcumulada) {
+          if (!permitirVentaSinStock && p.stock < cantidadAcumulada) {
             throw bErr(`Stock insuficiente de ${p.nombre}: hay ${p.stock}, pide ${cantidadAcumulada}`);
           }
           cantidadesPorProducto.set(p.id, cantidadAcumulada);
@@ -1610,6 +1721,52 @@ app.post('/api/caja/abrir', h(async (req, res) => {
     previa_abierta: previasAbiertas.length ? previasAbiertas[previasAbiertas.length - 1].fecha : null,
     previas_abiertas: previasAbiertas.map((c) => c.fecha),
   });
+}));
+
+app.put('/api/caja/apertura', h(async (req, res) => {
+  const sucursalId = sucursalOperativa(req);
+  const cajaId = entero(req.body.caja_id, 1, null);
+  const nuevaApertura = num(req.body.apertura, 0, 1e12, null);
+  if (nuevaApertura === null) {
+    return res.status(400).json({ error: 'Ingresá un monto de apertura válido (0 o mayor)' });
+  }
+  const motivo = str(req.body.motivo, 250) || 'Corrección de monto inicial';
+
+  const resultado = await db.transakt(async (t) => {
+    const caja = cajaId
+      ? await t.get(`SELECT * FROM cajas WHERE id = $1 FOR UPDATE`, [cajaId])
+      : await t.get(`SELECT * FROM cajas WHERE fecha = $1 AND sucursal_id = $2 AND estado = 'abierta' FOR UPDATE`, [hoy(), sucursalId]);
+
+    if (!caja) throw bErr('No se encontró una caja abierta');
+    if (req.sesion.sucursal_id && caja.sucursal_id !== req.sesion.sucursal_id) {
+      throw bErr('No podés operar la caja de otra sucursal', 403);
+    }
+    if (caja.estado !== 'abierta') {
+      throw bErr('Solo se puede modificar la apertura de una caja que se encuentre abierta');
+    }
+
+    const aperturaAnterior = caja.apertura;
+    await t.run(`UPDATE cajas SET apertura = $1 WHERE id = $2`, [nuevaApertura, caja.id]);
+
+    await registrarAuditoria(t, {
+      usuarioId: req.sesion ? req.sesion.id : null,
+      usuarioNombre: req.sesion ? req.sesion.usuario : 'sistema',
+      sucursalId: caja.sucursal_id,
+      accion: 'modificar_apertura_caja',
+      entidadTipo: 'caja',
+      entidadId: caja.id,
+      detalles: {
+        apertura_anterior: aperturaAnterior,
+        apertura_nueva: nuevaApertura,
+        fecha: caja.fecha,
+      },
+      motivo,
+    });
+
+    return { id: caja.id, apertura_anterior: aperturaAnterior, apertura_nueva: nuevaApertura };
+  });
+
+  res.json({ ok: true, ...resultado });
 }));
 
 app.post('/api/caja/cerrar', h(async (req, res) => {

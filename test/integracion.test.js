@@ -338,8 +338,9 @@ test('venta: conserva el importe ingresado y calcula la cantidad desde el precio
   assert.equal(demasiadosDecimales.status, 400, 'rechaza cantidades con más de tres decimales');
 });
 
-test('ventas concurrentes no pueden vender más unidades que el stock', async () => {
+test('con permitir_venta_sin_stock = 0: ventas concurrentes no pueden vender más unidades que el stock', async () => {
   const admin = await login('admin', 'admin123');
+  await put(admin, '/api/config', { permitir_venta_sin_stock: 0 });
   const creado = await post(admin, '/api/productos', {
     nombre: 'Producto para prueba concurrente', precio_venta: 1000, stock: 5,
   });
@@ -355,6 +356,40 @@ test('ventas concurrentes no pueden vender más unidades que el stock', async ()
   const producto = (await oku(await get(admin, '/api/productos'), 'productos'))
     .find((p) => p.id === creado.cuerpo.id);
   assert.equal(producto.stock, 1, 'el stock nunca queda negativo ni se sobrevende');
+});
+
+test('con permitir_venta_sin_stock = 1: permite venta sin stock y descuenta a negativo', async () => {
+  const admin = await login('admin', 'admin123');
+  await put(admin, '/api/config', { permitir_venta_sin_stock: 1 });
+  const creado = await post(admin, '/api/productos', {
+    nombre: 'Producto sin stock habilitado', precio_venta: 1500, stock: 0,
+  });
+  assert.equal(creado.status, 200);
+
+  const venta = await post(admin, '/api/ventas', {
+    items: [{ producto_id: creado.cuerpo.id, cantidad: 3 }]
+  });
+  assert.equal(venta.status, 200);
+
+  const producto = (await oku(await get(admin, '/api/productos'), 'productos'))
+    .find((p) => p.id === creado.cuerpo.id);
+  assert.equal(producto.stock, -3, 'el stock queda en -3');
+});
+
+test('caja: permite modificar monto de apertura de caja abierta y audita el cambio', async () => {
+  const admin = await login('admin', 'admin123');
+  const modApertura = await put(admin, '/api/caja/apertura', {
+    apertura: 125000,
+    motivo: 'Ajuste de prueba'
+  });
+  assert.equal(modApertura.status, 200);
+  assert.equal(modApertura.cuerpo.apertura_nueva, 125000);
+
+  const caja = await get(admin, '/api/caja', { sucursal_id: 1 });
+  assert.equal(caja.cuerpo.apertura, 125000);
+
+  const auditoria = await get(admin, '/api/auditoria');
+  assert.ok(auditoria.cuerpo.filas.some((a) => a.accion === 'modificar_apertura_caja' && a.motivo === 'Ajuste de prueba'));
 });
 
 test('factura legal sin cliente -> 400', async () => {
@@ -811,4 +846,56 @@ test('bloqueo tras 5 intentos de login fallidos', async () => {
   }
   const r6 = await api('POST', '/api/auth/login', { json: { usuario: 'admin', password: 'admin123' } });
   assert.equal(r6.status, 429);
+});
+
+test('gastos y proveedores: flujo completo de gastos varios y pago a proveedores', async () => {
+  const admin = await login('admin', 'admin123');
+
+  // 1. Crear proveedor
+  const provRes = await post(admin, '/api/proveedores', {
+    nombre: 'Molinos del Sur',
+    rubro: 'Harinas',
+    telefono: '0981-555666',
+    ruc: '80045678-9',
+    contacto: 'Juan Pérez'
+  });
+  assert.equal(provRes.status, 200);
+  assert.equal(provRes.cuerpo.nombre, 'Molinos del Sur');
+  const provId = provRes.cuerpo.id;
+
+  // 2. Registrar gasto vario en efectivo (afecta caja) con motivo opcional
+  const gVario = await post(admin, '/api/gastos', {
+    tipo: 'varios',
+    concepto: 'Artículos de limpieza',
+    categoria: 'Limpieza',
+    motivo: 'Compra de lavandina y bolsas',
+    monto: 25000,
+    forma_pago: 'efectivo'
+  });
+  assert.equal(gVario.status, 200);
+
+  // 3. Registrar pago a proveedor por transferencia (NO afecta efectivo de caja)
+  const gProv = await post(admin, '/api/gastos', {
+    tipo: 'proveedor',
+    proveedor_id: provId,
+    concepto: '10 bolsas de harina 000',
+    comprobante: 'F-001-002-0045',
+    monto: 850000,
+    forma_pago: 'transferencia'
+  });
+  assert.equal(gProv.status, 200);
+
+  // 4. Listar gastos y verificar campos
+  const listaVarios = await get(admin, '/api/gastos', { tipo: 'varios' });
+  assert.equal(listaVarios.status, 200);
+  assert.ok(listaVarios.cuerpo.some((g) => g.id === gVario.cuerpo.id && g.motivo === 'Compra de lavandina y bolsas'));
+
+  const listaProv = await get(admin, '/api/gastos', { tipo: 'proveedor' });
+  assert.equal(listaProv.status, 200);
+  assert.ok(listaProv.cuerpo.some((g) => g.id === gProv.cuerpo.id && g.proveedor_nombre === 'Molinos del Sur'));
+
+  // 5. Verificar que el de efectivo restó de caja pero el de transferencia no
+  const caja = await get(admin, '/api/caja', { sucursal_id: 1 });
+  assert.ok(caja.cuerpo.movimientos.some((m) => m.monto === 25000 && m.tipo === 'egreso'));
+  assert.ok(!caja.cuerpo.movimientos.some((m) => m.monto === 850000));
 });

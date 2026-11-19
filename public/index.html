@@ -157,14 +157,16 @@
         </div>
 
         <div class="pos-header-row">
-          <button type="button" class="pos-search-wrap pos-quick-search pos-search-trigger" onclick="abrirBuscarProductoPOS()" aria-haspopup="dialog">
+          <button type="button" class="pos-search-wrap pos-quick-search pos-search-trigger" onclick="abrirBuscarProductoPOS()" aria-haspopup="dialog" title="Atajo: F2 o Ctrl+B">
             <i data-lucide="search"></i>
             <span>Buscar por nombre, código o categoría...</span>
+            <kbd class="pos-kbd">F2</kbd>
           </button>
-          <button class="btn ghost pos-new-sale" onclick="nuevaVentaPOS()"><i data-lucide="plus"></i> Nueva venta</button>
-          <button class="pos-client-btn" onclick="abrirSelectorClientePOS()">
+          <button class="btn ghost pos-new-sale" onclick="nuevaVentaPOS()" title="Atajo: F8 o Ctrl+N"><i data-lucide="plus"></i> Nueva venta <kbd class="pos-kbd">F8</kbd></button>
+          <button class="pos-client-btn" onclick="abrirSelectorClientePOS()" title="Atajo: F4 o Ctrl+U">
             <i data-lucide="user"></i>
             <span id="pos-cliente-nombre-top">Sin cliente</span>
+            <kbd class="pos-kbd">F4</kbd>
           </button>
           <select id="pos-tipo-comprobante" class="pos-select">
             <option value="ticket">Ticket</option>
@@ -216,7 +218,7 @@
                     <span>Descuento</span>
                     <div class="pos-disc-wrap">
                       <span>₲</span>
-                      <input type="number" id="pos-descuento" value="0" min="0">
+                      <input type="number" id="pos-descuento" value="0" min="0" autocomplete="off" autocorrect="off" spellcheck="false">
                     </div>
                   </div>
                   <div class="pos-tot-row total">
@@ -239,16 +241,16 @@
                 <div class="pos-field" id="pos-pagos-mixtos" style="display:none">
                   <label>Desglose del pago</label>
                   <div class="form-row">
-                    <div><label>Efectivo<input type="number" id="pos-pago-efectivo" class="pos-input" min="0" placeholder="0"></label></div>
-                    <div><label>Transferencia<input type="number" id="pos-pago-transferencia" class="pos-input" min="0" placeholder="0"></label></div>
-                    <div><label>Tarjeta<input type="number" id="pos-pago-tarjeta" class="pos-input" min="0" placeholder="0"></label></div>
+                    <div><label>Efectivo<input type="number" id="pos-pago-efectivo" class="pos-input" min="0" placeholder="0" autocomplete="off" autocorrect="off" spellcheck="false"></label></div>
+                    <div><label>Transferencia<input type="number" id="pos-pago-transferencia" class="pos-input" min="0" placeholder="0" autocomplete="off" autocorrect="off" spellcheck="false"></label></div>
+                    <div><label>Tarjeta<input type="number" id="pos-pago-tarjeta" class="pos-input" min="0" placeholder="0" autocomplete="off" autocorrect="off" spellcheck="false"></label></div>
                   </div>
                   <p class="muted" id="pos-pagos-mixtos-resumen">Los importes deben sumar el total de la venta.</p>
                 </div>
 
                 <div class="pos-field" id="pos-recibido-group">
                   <label id="pos-recibido-label">Monto recibido</label>
-                  <input type="number" id="pos-recibido" class="pos-input" placeholder="0">
+                  <input type="number" id="pos-recibido" class="pos-input" placeholder="0" autocomplete="off" autocorrect="off" spellcheck="false">
                 </div>
 
                 <div class="pos-vuelto" id="pos-vuelto-wrap" style="display:none">
@@ -261,7 +263,7 @@
                   <strong id="pos-saldo">₲ 0</strong>
                 </div>
 
-                <button class="btn btn-cobrar" id="btn-vender"><i data-lucide="check-circle"></i> Cobrar</button>
+                <button class="btn btn-cobrar" id="btn-vender" title="Atajo: F9 o Ctrl+Enter"><i data-lucide="check-circle"></i> Cobrar <kbd class="pos-kbd">F9</kbd></button>
               </div>
             </div>
           </div>
@@ -313,7 +315,7 @@
               </select>
             </label>
             <label class="ventas-busqueda">Buscar
-              <input type="search" id="ventas-buscar" placeholder="N.º, cliente o documento">
+              <input type="search" id="ventas-buscar" placeholder="N.º, cliente o documento" autocomplete="off" autocorrect="off" spellcheck="false">
             </label>
             <button type="submit" class="btn"><i data-lucide="search"></i> Buscar</button>
           </form>
@@ -343,7 +345,7 @@
         <div class="box">
           <div class="buscar-wrap" style="margin-bottom:16px">
             <i data-lucide="search" class="buscar-ico"></i>
-            <input type="text" id="productos-buscar" placeholder="Buscar producto..." class="buscar">
+            <input type="text" id="productos-buscar" placeholder="Buscar producto..." class="buscar" autocomplete="off" autocorrect="off" spellcheck="false">
           </div>
           <table id="tabla-productos"></table>
         </div>
@@ -422,7 +424,7 @@
           <p class="muted" style="margin-bottom:14px">Ventas sin nombre o documento quedan como <b>Consumidor Final</b>. Usá la opción <b>Cliente mostrador</b> en el punto de venta.</p>
           <div class="buscar-wrap" style="margin-bottom:16px">
             <i data-lucide="search" class="buscar-ico"></i>
-            <input type="text" id="clientes-buscar" placeholder="Buscar cliente..." class="buscar">
+            <input type="text" id="clientes-buscar" placeholder="Buscar cliente..." class="buscar" autocomplete="off" autocorrect="off" spellcheck="false">
           </div>
           <table id="tabla-clientes"></table>
         </div>
@@ -541,7 +543,7 @@
           <div id="caja-abrir" class="box">
             <h3>Abrir caja del día</h3>
             <label>Efectivo inicial
-              <input type="number" id="caja-apertura" value="0">
+              <input type="number" id="caja-apertura" value="0" autocomplete="off" autocorrect="off" spellcheck="false">
             </label>
             <button class="btn" id="btn-abrir-caja"><i data-lucide="lock-open"></i> Abrir caja</button>
             <p class="msg" id="abrir-msg"></p>
@@ -570,18 +572,44 @@
       <section id="tab-gastos" class="panel">
         <div class="page-head">
           <h2>Gastos</h2>
-          <button class="btn" id="btn-nuevo-gasto"><i data-lucide="plus"></i> Registrar gasto</button>
+          <div class="actions" style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn ghost" id="btn-gestionar-proveedores" style="display:none"><i data-lucide="truck"></i> Gestionar proveedores</button>
+            <button class="btn" id="btn-nuevo-gasto"><i data-lucide="plus"></i> <span id="btn-nuevo-gasto-texto">Registrar gasto vario</span></button>
+          </div>
+        </div>
+        <div class="seg" id="gastos-seg" style="margin-bottom:16px">
+          <button type="button" class="activo" data-subtab="varios"><i data-lucide="receipt"></i> Gastos Varios</button>
+          <button type="button" data-subtab="proveedores"><i data-lucide="truck"></i> Pago a Proveedores</button>
         </div>
         <div class="cards" id="gastos-cards"></div>
-        <div class="box">
+
+        <!-- Sub-pestaña Gastos Varios -->
+        <div id="gastos-subtab-varios" class="box">
           <div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap">
             <label style="margin:0;flex:1;min-width:160px">Filtrar por fecha
-              <input type="date" id="gastos-fecha">
+              <input type="date" id="gastos-fecha-varios">
             </label>
-            <button class="btn ghost" id="btn-gastos-hoy" style="margin-bottom:0">Hoy</button>
-            <button class="btn ghost" id="btn-gastos-todos" style="margin-bottom:0">Todos</button>
+            <button class="btn ghost" id="btn-gastos-hoy-varios" style="margin-bottom:0">Hoy</button>
+            <button class="btn ghost" id="btn-gastos-todos-varios" style="margin-bottom:0">Todos</button>
           </div>
-          <table id="tabla-gastos"></table>
+          <table id="tabla-gastos-varios"></table>
+        </div>
+
+        <!-- Sub-pestaña Pago a Proveedores -->
+        <div id="gastos-subtab-proveedores" class="box hidden">
+          <div style="display:flex;gap:12px;align-items:flex-end;margin-bottom:16px;flex-wrap:wrap">
+            <label style="margin:0;flex:1;min-width:160px">Filtrar por fecha
+              <input type="date" id="gastos-fecha-proveedores">
+            </label>
+            <label style="margin:0;flex:1;min-width:180px">Proveedor
+              <select id="gastos-filtro-proveedor" class="pos-select full">
+                <option value="">Todos los proveedores</option>
+              </select>
+            </label>
+            <button class="btn ghost" id="btn-gastos-hoy-proveedores" style="margin-bottom:0">Hoy</button>
+            <button class="btn ghost" id="btn-gastos-todos-proveedores" style="margin-bottom:0">Todos</button>
+          </div>
+          <table id="tabla-gastos-proveedores"></table>
         </div>
       </section>
 
@@ -911,6 +939,15 @@
               </div>
               <p class="muted" style="margin-top:6px">Sin logo, el comprobante muestra el nombre del negocio.</p>
             </div>
+          </div>
+          <div class="form-row" style="margin:14px 0 16px;padding:12px 14px;background:var(--crema);border:1px solid var(--borde);border-radius:var(--radius-sm)">
+            <label style="display:flex;align-items:flex-start;gap:12px;cursor:pointer;margin:0">
+              <input type="checkbox" id="cfg-permitir-sin-stock" checked style="width:18px;height:18px;margin-top:2px;accent-color:var(--marron-deep);cursor:pointer;flex-shrink:0">
+              <span>
+                <strong style="display:block;color:var(--marron-deep);font-size:13.5px">Permitir ventas sin stock disponible</strong>
+                <span class="muted" style="font-weight:400;font-size:12.5px;display:block;margin-top:2px">Habilita despachar productos en el mostrador aunque figuren en 0 o sin stock suficiente (el stock quedará temporalmente en negativo hasta registrar la producción).</span>
+              </span>
+            </label>
           </div>
           <button class="btn" id="btn-guardar-config"><i data-lucide="save"></i> Guardar configuración</button>
           <button class="btn ghost" onclick="mostrarTerminos(true)" style="margin-left:8px"><i data-lucide="scroll-text"></i> Términos y Condiciones</button>

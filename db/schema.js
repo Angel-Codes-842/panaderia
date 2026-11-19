@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS configuracion (
 
 ALTER TABLE configuracion ADD COLUMN IF NOT EXISTS logo TEXT NOT NULL DEFAULT '';
 ALTER TABLE configuracion ADD COLUMN IF NOT EXISTS actividad_economica TEXT NOT NULL DEFAULT '';
+ALTER TABLE configuracion ADD COLUMN IF NOT EXISTS permitir_venta_sin_stock SMALLINT NOT NULL DEFAULT 1;
 CREATE TABLE IF NOT EXISTS configuracion_fiscal (
   sucursal_id BIGINT PRIMARY KEY REFERENCES sucursales(id) ON DELETE CASCADE,
   timbrado TEXT NOT NULL DEFAULT '',
@@ -288,6 +289,18 @@ CREATE TABLE IF NOT EXISTS abonos (
   creado_en TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS proveedores (
+  id BIGSERIAL PRIMARY KEY,
+  nombre TEXT NOT NULL,
+  contacto TEXT NOT NULL DEFAULT '',
+  telefono TEXT NOT NULL DEFAULT '',
+  ruc TEXT NOT NULL DEFAULT '',
+  rubro TEXT NOT NULL DEFAULT '',
+  direccion TEXT NOT NULL DEFAULT '',
+  activo SMALLINT NOT NULL DEFAULT 1,
+  creado_en TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS gastos (
   id BIGSERIAL PRIMARY KEY,
   concepto TEXT NOT NULL,
@@ -297,6 +310,12 @@ CREATE TABLE IF NOT EXISTS gastos (
   sucursal_id BIGINT NOT NULL DEFAULT 1,
   caja_id BIGINT REFERENCES cajas(id)
 );
+
+ALTER TABLE gastos ADD COLUMN IF NOT EXISTS tipo TEXT NOT NULL DEFAULT 'varios';
+ALTER TABLE gastos ADD COLUMN IF NOT EXISTS proveedor_id BIGINT REFERENCES proveedores(id);
+ALTER TABLE gastos ADD COLUMN IF NOT EXISTS motivo TEXT NOT NULL DEFAULT '';
+ALTER TABLE gastos ADD COLUMN IF NOT EXISTS comprobante TEXT NOT NULL DEFAULT '';
+ALTER TABLE gastos ADD COLUMN IF NOT EXISTS forma_pago TEXT NOT NULL DEFAULT 'efectivo';
 
 CREATE TABLE IF NOT EXISTS licencia (
   id BIGINT PRIMARY KEY CHECK (id = 1),
@@ -338,6 +357,9 @@ CREATE INDEX IF NOT EXISTS idx_venta_pagos_venta ON venta_pagos(venta_id);
 CREATE INDEX IF NOT EXISTS idx_movimientos_caja_caja ON movimientos_caja(caja_id);
 CREATE INDEX IF NOT EXISTS idx_gastos_fecha ON gastos(fecha);
 CREATE INDEX IF NOT EXISTS idx_gastos_sucursal_fecha ON gastos(sucursal_id, fecha);
+CREATE INDEX IF NOT EXISTS idx_gastos_tipo ON gastos(tipo);
+CREATE INDEX IF NOT EXISTS idx_gastos_proveedor ON gastos(proveedor_id);
+CREATE INDEX IF NOT EXISTS idx_proveedores_activo ON proveedores(activo);
 CREATE INDEX IF NOT EXISTS idx_lotes_fecha ON lotes(fecha);
 CREATE INDEX IF NOT EXISTS idx_lotes_sucursal_fecha ON lotes(sucursal_id, fecha);
 CREATE INDEX IF NOT EXISTS idx_cajas_sucursal_fecha ON cajas(sucursal_id, fecha);

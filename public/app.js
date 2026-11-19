@@ -15,10 +15,54 @@ document.addEventListener('wheel', (e) => {
   if (e.target instanceof HTMLInputElement && e.target.type === 'number') e.preventDefault();
 }, { passive: false });
 
+function sanitizarAutocompletado(raiz = document) {
+  if (!raiz || !raiz.querySelectorAll) return;
+  try {
+    const forms = (raiz.matches && raiz.matches('form'))
+      ? [raiz, ...raiz.querySelectorAll('form')]
+      : (raiz.querySelectorAll ? raiz.querySelectorAll('form') : []);
+    forms.forEach((f) => f.setAttribute('autocomplete', 'off'));
+
+    const inputs = (raiz.matches && raiz.matches('input, textarea, select'))
+      ? [raiz, ...raiz.querySelectorAll('input, textarea, select')]
+      : (raiz.querySelectorAll ? raiz.querySelectorAll('input, textarea, select') : []);
+
+    inputs.forEach((inp) => {
+      const id = inp.id || '';
+      if (id === 'login-usuario' || id === 'login-password' || inp.type === 'hidden' || inp.type === 'checkbox' || inp.type === 'radio') return;
+      if (!inp.hasAttribute('autocomplete') || inp.getAttribute('autocomplete') !== 'off') {
+        inp.setAttribute('autocomplete', 'off');
+      }
+      inp.setAttribute('autocorrect', 'off');
+      inp.setAttribute('autocapitalize', 'off');
+      inp.setAttribute('spellcheck', 'false');
+      inp.setAttribute('data-lpignore', 'true');
+      inp.setAttribute('data-1p-ignore', 'true');
+    });
+  } catch (_) {}
+}
+
 let productosGlobal = [];
 let clientesGlobal = [];
+let configGlobal = null;
 const carrito = new Map();
 const importesCarrito = new Map();
+
+async function obtenerConfig() {
+  if (!configGlobal) {
+    try {
+      configGlobal = await api('/api/config');
+    } catch (_) {
+      configGlobal = { permitir_venta_sin_stock: 1 };
+    }
+  }
+  return configGlobal;
+}
+
+function permiteVentaSinStock() {
+  if (!configGlobal) return true;
+  return configGlobal.permitir_venta_sin_stock === undefined || Number(configGlobal.permitir_venta_sin_stock) === 1;
+}
 
 // Mantener el carrito entre cambios de pestaña (el flujo rápido pide no
 // perderlo al pasar por otros módulos).
@@ -103,7 +147,7 @@ function armarAutocompletarCliente(entradaId, contId, alElegir) {
   const ocultar = () => { drop.classList.remove('visible'); drop.innerHTML = ''; indice = -1; };
   const elegir = (i) => { if (lista[i]) { alElegir(lista[i]); ocultar(); input.blur(); } };
   const mostrar = (items) => {
-    lista = items; indice = -1;
+    lista = items; indice = items.length ? 0 : -1;
     drop.innerHTML = items.length
       ? items.map((c, i) => `<button type="button" data-i="${i}">${escapeHtml(c.nombre || (c.tipo_documento + ' ' + c.documento))}<small>${escapeHtml(c.tipo_documento)} ${escapeHtml(c.documento)}</small></button>`).join('')
       : '<div class="ac-vacio">Sin coincidencias</div>';
@@ -112,9 +156,14 @@ function armarAutocompletarCliente(entradaId, contId, alElegir) {
       b.addEventListener('mouseenter', () => { indice = +b.dataset.i; pintaSel(); });
       b.addEventListener('mousedown', (e) => { e.preventDefault(); elegir(+b.dataset.i); });
     });
+    pintaSel();
   };
   const pintaSel = () => {
-    [...drop.querySelectorAll('button')].forEach((b, j) => b.classList.toggle('sel', j === indice));
+    [...drop.querySelectorAll('button')].forEach((b, j) => {
+      const sel = j === indice;
+      b.classList.toggle('sel', sel);
+      if (sel) b.scrollIntoView({ block: 'nearest' });
+    });
   };
   const analizar = () => {
     const norm = soloDigitos(input.value);
@@ -128,10 +177,32 @@ function armarAutocompletarCliente(entradaId, contId, alElegir) {
   input.addEventListener('focus', analizar);
   input.addEventListener('input', analizar);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'ArrowDown') { e.preventDefault(); if (lista.length) pintaSel(indice >= lista.length - 1 ? 0 : indice + 1); }
-    else if (e.key === 'ArrowUp') { e.preventDefault(); if (lista.length) pintaSel(indice <= 0 ? lista.length - 1 : indice - 1); }
-    else if (e.key === 'Enter') { e.preventDefault(); if (indice >= 0) elegir(indice); }
-    else if (e.key === 'Escape') ocultar();
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (lista.length) {
+        indice = (indice >= lista.length - 1) ? 0 : indice + 1;
+        pintaSel();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (lista.length) {
+        indice = (indice <= 0) ? lista.length - 1 : indice - 1;
+        pintaSel();
+      }
+    } else if (e.key === 'Enter') {
+      if (drop.classList.contains('visible') && lista.length) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (indice >= 0 && lista[indice]) elegir(indice);
+        else elegir(0);
+      }
+    } else if (e.key === 'Escape') {
+      if (drop.classList.contains('visible')) {
+        e.preventDefault();
+        e.stopPropagation();
+        ocultar();
+      }
+    }
   });
   acAbiertos.push({ input, cont, ocultar });
   return ocultar;
@@ -232,9 +303,15 @@ function reicons() {
   const pendientes = document.querySelectorAll('[data-lucide]');
   if ([...pendientes].some((el) => el.tagName.toLowerCase() !== 'svg')) lucide.createIcons();
 }
-if (window.lucide) {
-  new MutationObserver(reicons).observe(document.body, { childList: true, subtree: true });
+if (typeof document !== 'undefined' && document.body) {
+  let _acTimer = null;
+  new MutationObserver(() => {
+    reicons();
+    clearTimeout(_acTimer);
+    _acTimer = setTimeout(() => sanitizarAutocompletado(document.body), 150);
+  }).observe(document.body, { childList: true, subtree: true });
   reicons();
+  sanitizarAutocompletado(document);
 }
 
 // ── Sesión ────────────────────────────────────────────────
@@ -575,6 +652,7 @@ function irATab(tab) {
   $$('.panel').forEach((x) => x.classList.toggle('active', x.id === 'tab-' + tab));
   const cargar = cargadores[tab];
   if (typeof cargar === 'function') cargar();
+  sanitizarAutocompletado(document.getElementById('tab-' + tab));
 }
 $$('.nav-item').forEach((b) => b.addEventListener('click', () => irATab(b.dataset.tab)));
 
@@ -627,19 +705,57 @@ async function cargarDashboard() {
 let posClienteSel = null;
 
 async function cargarPos() {
-  [productosGlobal, clientesGlobal] = await Promise.all([api('/api/productos'), api('/api/clientes')]);
+  [productosGlobal, clientesGlobal, configGlobal] = await Promise.all([api('/api/productos'), api('/api/clientes'), obtenerConfig()]);
   cargarCarritoGuardado();
   const fpago = $('#pos-forma-pago');
   if (fpago) { fpago.value = 'efectivo'; fpago.onchange = calcularVuelto; }
   const recibido = $('#pos-recibido');
-  if (recibido) { recibido.value = ''; recibido.oninput = calcularVuelto; }
+  if (recibido) {
+    recibido.value = '';
+    recibido.oninput = calcularVuelto;
+    recibido.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const { total } = calcularTotalNumerico();
+        const recVal = Number(recibido.value || 0);
+        if (!recVal && total > 0) {
+          recibido.value = total;
+          calcularVuelto();
+        }
+        const btn = $('#btn-vender');
+        if (btn && !btn.disabled) btn.click();
+      }
+    };
+  }
   ['efectivo', 'transferencia', 'tarjeta'].forEach((medio) => {
     const input = $(`#pos-pago-${medio}`);
-    if (input) { input.value = ''; input.oninput = calcularVuelto; }
+    if (input) {
+      input.value = '';
+      input.oninput = calcularVuelto;
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const btn = $('#btn-vender');
+          if (btn && !btn.disabled) btn.click();
+        }
+      };
+    }
   });
   const desc = $('#pos-descuento');
-  if (desc) desc.value = 0;
-  if (desc) desc.oninput = calcularTotalBoutique;
+  if (desc) {
+    desc.value = 0;
+    desc.oninput = calcularTotalBoutique;
+    desc.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const rec = $('#pos-recibido');
+        if (rec) {
+          rec.focus();
+          rec.select();
+        }
+      }
+    };
+  }
   const tipo = $('#pos-tipo-comprobante');
   if (tipo) tipo.value = 'ticket';
   posClienteSel = null;
@@ -666,6 +782,8 @@ async function cargarPos() {
   }
 }
 
+let posBuscarIndice = 0;
+
 function abrirBuscarProductoPOS(consulta = '') {
   abrirModal('Buscar producto', `
     <div class="pos-product-search">
@@ -677,10 +795,54 @@ function abrirBuscarProductoPOS(consulta = '') {
       <div id="pos-buscar-resultados" class="pos-product-results"></div>
     </div>`);
   const input = $('#pos-buscar-modal');
+  const cont = $('#pos-buscar-resultados');
   input.value = consulta;
   input.oninput = () => pintarResultadosBuscarPOS(input.value);
+
+  input.addEventListener('keydown', (e) => {
+    const items = cont ? [...cont.querySelectorAll('.pos-search-result:not(:disabled)')] : [];
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (items.length) {
+        posBuscarIndice = (posBuscarIndice >= items.length - 1) ? 0 : posBuscarIndice + 1;
+        actualizarSeleccionBusquedaPOS();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (items.length) {
+        posBuscarIndice = (posBuscarIndice <= 0) ? items.length - 1 : posBuscarIndice - 1;
+        actualizarSeleccionBusquedaPOS();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (items.length) {
+        if (posBuscarIndice >= 0 && items[posBuscarIndice]) {
+          items[posBuscarIndice].click();
+        } else {
+          items[0].click();
+        }
+      }
+    }
+  });
+
+  if (cont) {
+    cont.addEventListener('mouseover', (e) => {
+      const btn = e.target.closest('.pos-search-result:not(:disabled)');
+      if (!btn) return;
+      const items = [...cont.querySelectorAll('.pos-search-result:not(:disabled)')];
+      const idx = items.indexOf(btn);
+      if (idx !== -1 && idx !== posBuscarIndice) {
+        posBuscarIndice = idx;
+        items.forEach((b, i) => b.classList.toggle('activo', i === idx));
+      }
+    });
+  }
+
   pintarResultadosBuscarPOS(consulta);
-  input.focus();
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 40);
   reicons();
 }
 
@@ -695,22 +857,53 @@ function pintarResultadosBuscarPOS(consulta) {
     (p.categoria || '').toLowerCase().includes(q)
   ));
   if (!lista.length) {
+    posBuscarIndice = -1;
     cont.innerHTML = '<div class="pos-search-empty">No se encontraron productos</div>';
     return;
   }
   cont.innerHTML = lista.slice(0, 100).map((p) => {
     const agotado = p.stock <= 0;
+    const sinStockPermitido = agotado && permiteVentaSinStock();
+    const deshabilitado = agotado && !permiteVentaSinStock();
     const esKg = p.unidad === 'kg';
     const codigo = p.codigo || p.code || 'Sin código';
-    const stock = agotado ? 'Sin stock' : unidadLabel(p.unidad, p.stock);
-    return `<button type="button" class="pos-search-result" ${agotado ? 'disabled' : ''} onclick="seleccionarProductoBuscarPOS(${p.id})">
+    const stockEtiqueta = agotado
+      ? (p.stock < 0 ? `${unidadLabel(p.unidad, p.stock)}` : 'Sin stock')
+      : unidadLabel(p.unidad, p.stock);
+    const stockHtml = agotado
+      ? `<span style="color:${sinStockPermitido ? 'var(--ambar)' : 'var(--rojo)'};font-weight:600">${escapeHtml(stockEtiqueta)}${sinStockPermitido ? ' (venta habilitada)' : ''}</span>`
+      : escapeHtml(stockEtiqueta);
+    return `<button type="button" class="pos-search-result" ${deshabilitado ? 'disabled' : ''} onclick="seleccionarProductoBuscarPOS(${p.id})">
       <span class="pos-search-result-info">
         <strong>${escapeHtml(p.nombre)}</strong>
-        <small>${escapeHtml(codigo)} · ${escapeHtml(stock)}</small>
+        <small>${escapeHtml(codigo)} · ${stockHtml}</small>
       </span>
       <span class="pos-search-result-price">${fmtGs(p.precio_venta)}${esKg ? '/kg' : ''}</span>
     </button>`;
   }).join('');
+
+  posBuscarIndice = 0;
+  actualizarSeleccionBusquedaPOS();
+}
+
+function actualizarSeleccionBusquedaPOS() {
+  const cont = $('#pos-buscar-resultados');
+  if (!cont) return;
+  const items = [...cont.querySelectorAll('.pos-search-result:not(:disabled)')];
+  if (!items.length) {
+    posBuscarIndice = -1;
+    return;
+  }
+  if (posBuscarIndice < 0) posBuscarIndice = 0;
+  if (posBuscarIndice >= items.length) posBuscarIndice = items.length - 1;
+
+  items.forEach((item, i) => {
+    const activo = (i === posBuscarIndice);
+    item.classList.toggle('activo', activo);
+    if (activo) {
+      item.scrollIntoView({ block: 'nearest' });
+    }
+  });
 }
 
 function seleccionarProductoBuscarPOS(id) {
@@ -730,12 +923,20 @@ function pedirCantidadProducto(id) {
   const unidad = p.unidad === 'kg' ? 'kg' : p.unidad === 'docena' ? 'docena' : 'unidad';
   const cantidadActual = carrito.get(id) || 0;
   const stockDisponible = Math.max(0, p.stock - cantidadActual);
-  if (stockDisponible <= 0) return toast(`Stock insuficiente de ${p.nombre}`, 'warn');
-  const cantidadInicial = Math.min(p.unidad === 'kg' ? 0.5 : 1, stockDisponible);
+  const sinStock = stockDisponible <= 0;
+  if (!permiteVentaSinStock() && sinStock) return toast(`Stock insuficiente de ${p.nombre}`, 'warn');
+  const cantidadInicial = permiteVentaSinStock() && sinStock
+    ? (p.unidad === 'kg' ? 0.5 : 1)
+    : Math.min(p.unidad === 'kg' ? 0.5 : 1, Math.max(0.001, stockDisponible));
+  const maxAttr = permiteVentaSinStock() ? '' : `max="${stockDisponible}"`;
+  const infoDisponible = sinStock
+    ? (permiteVentaSinStock() ? '<b style="color:var(--ambar)">Sin stock (permitido)</b>' : '<b>0 ' + unidad + '</b>')
+    : `<b>${stockDisponible.toLocaleString('es-PY', { maximumFractionDigits: 3 })} ${unidad}</b>`;
+
   abrirModal(`Agregar ${p.nombre}`, `
-    <p class="muted">Precio por ${unidad}: <b>${fmtGs(p.precio_venta)}</b> · Disponible: <b>${stockDisponible.toLocaleString('es-PY', { maximumFractionDigits: 3 })} ${unidad}</b></p>
+    <p class="muted">Precio por ${unidad}: <b>${fmtGs(p.precio_venta)}</b> · Disponible: ${infoDisponible}</p>
     <div class="form-row">
-      <div><label>Cantidad (${unidad})<input type="number" id="producto-cantidad" min="0.001" max="${stockDisponible}" step="0.001" value="${cantidadInicial || ''}" placeholder="Ej: 0,500"></label></div>
+      <div><label>Cantidad (${unidad})<input type="number" id="producto-cantidad" min="0.001" ${maxAttr} step="0.001" value="${cantidadInicial || ''}" placeholder="Ej: 0,500"></label></div>
       <div><label>Importe (₲)<input type="number" id="producto-importe" min="0" step="any" placeholder="Ingresá cantidad o importe"></label></div>
     </div>
     <p id="producto-prev" class="prev-box muted" style="display:none"></p>
@@ -790,8 +991,20 @@ function pedirCantidadProducto(id) {
       prev.textContent = `El importe no alcanza para una cantidad mínima de 0,001 ${unidad}.`;
     }
   };
+  const onEnterConfirmar = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      confirmarCantidadProducto(id);
+    }
+  };
+  cantidadInput.addEventListener('keydown', onEnterConfirmar);
+  importeInput.addEventListener('keydown', onEnterConfirmar);
+
   cantidadInput.dispatchEvent(new Event('input'));
-  cantidadInput.focus();
+  setTimeout(() => {
+    cantidadInput.focus();
+    cantidadInput.select();
+  }, 40);
 }
 
 function confirmarCantidadProducto(id) {
@@ -803,7 +1016,7 @@ function confirmarCantidadProducto(id) {
   if (Math.abs(cantidad - ingresada) > 0.00000001) return toast('La cantidad admite hasta tres decimales', 'warn');
   const cantidadAnterior = carrito.get(id) || 0;
   const total = cantidadAnterior + cantidad;
-  if (total > p.stock + 0.000001) {
+  if (!permiteVentaSinStock() && total > p.stock + 0.000001) {
     const unidad = p.unidad === 'kg' ? 'kg' : 'unidades';
     return toast(`Stock insuficiente: quedan ${(p.stock - (carrito.get(id) || 0)).toLocaleString('es-PY', { maximumFractionDigits: 3 })} ${unidad}`, 'err');
   }
@@ -824,7 +1037,7 @@ function cambiarCant(id, delta) {
   const paso = p.unidad === 'kg' ? 0.1 : 1;
   const nueva = Math.round(((carrito.get(id) || 0) + delta * paso) * 1000) / 1000;
   if (nueva <= 0) { carrito.delete(id); importesCarrito.delete(id); guardarCarrito(); return pintarTicket(); }
-  if (nueva > p.stock) return toast(`Stock insuficiente de ${p.nombre}`, 'warn');
+  if (!permiteVentaSinStock() && nueva > p.stock) return toast(`Stock insuficiente de ${p.nombre}`, 'warn');
   carrito.set(id, nueva);
   importesCarrito.delete(id);
   guardarCarrito();
@@ -960,12 +1173,118 @@ function agregarPorCodigoPOS(e) {
 
 if (typeof document !== 'undefined') {
   document.addEventListener('keydown', (e) => {
-    const tag = document.activeElement && document.activeElement.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
-        !$('#tab-ventas')?.classList.contains('active') || !$('#modal')?.classList.contains('hidden')) return;
-    if (e.key === 'F2') { e.preventDefault(); abrirBuscarProductoPOS(); }
-    if (e.key === 'F4') { e.preventDefault(); abrirSelectorClientePOS(); }
-    if (e.key === 'F9') { e.preventDefault(); $('#btn-vender')?.click(); }
+    const modal = $('#modal');
+    const modalAbierto = modal && !modal.classList.contains('hidden');
+    const confirmBack = $('#confirm-back');
+    const confirmAbierto = confirmBack && !confirmBack.classList.contains('hidden');
+
+    // 1. Si el diálogo de confirmación está abierto, confirm-back maneja sus teclas
+    if (confirmAbierto) return;
+
+    const key = e.key;
+    const code = e.code;
+    const ctrl = e.ctrlKey || e.metaKey;
+
+    // 2. Atajos de función y navegación (F2, F4, F8, F9 y alternativas Ctrl+B, Ctrl+U, Ctrl+N, Ctrl+Enter)
+    const esF2 = key === 'F2' || code === 'F2' || (ctrl && (key === 'b' || key === 'B'));
+    const esF4 = key === 'F4' || code === 'F4' || (ctrl && (key === 'u' || key === 'U'));
+    const esF8 = key === 'F8' || code === 'F8' || (ctrl && (key === 'n' || key === 'N'));
+    const esF9 = key === 'F9' || code === 'F9' || (ctrl && key === 'Enter');
+
+    if (esF2) {
+      e.preventDefault();
+      if (modalAbierto && $('#pos-buscar-modal')) {
+        $('#pos-buscar-modal').focus();
+        $('#pos-buscar-modal').select();
+        return;
+      }
+      if (modalAbierto) cerrarModal();
+      if (!$('#tab-ventas')?.classList.contains('active')) irATab('ventas');
+      abrirBuscarProductoPOS();
+      return;
+    }
+
+    if (esF4) {
+      e.preventDefault();
+      if (modalAbierto) cerrarModal();
+      if (!$('#tab-ventas')?.classList.contains('active')) irATab('ventas');
+      abrirSelectorClientePOS();
+      return;
+    }
+
+    if (esF8) {
+      e.preventDefault();
+      if (modalAbierto) cerrarModal();
+      if (!$('#tab-ventas')?.classList.contains('active')) irATab('ventas');
+      nuevaVentaPOS();
+      return;
+    }
+
+    if (esF9) {
+      e.preventDefault();
+      if (modalAbierto) cerrarModal();
+      if (!$('#tab-ventas')?.classList.contains('active')) {
+        irATab('ventas');
+        return;
+      }
+      const fp = $('#pos-forma-pago')?.value || 'efectivo';
+      if (fp === 'efectivo') {
+        const { total } = calcularTotalNumerico();
+        const rec = $('#pos-recibido');
+        if (rec && !Number(rec.value || 0) && total > 0) {
+          rec.value = total;
+          calcularVuelto();
+        }
+      }
+      $('#btn-vender')?.click();
+      return;
+    }
+
+    // 3. Comportamiento dentro de un modal abierto
+    if (modalAbierto) {
+      // Escape cierra el modal
+      if (key === 'Escape') {
+        if (modal.querySelector('.ac-dropdown.visible')) return;
+        e.preventDefault();
+        cerrarModal();
+        return;
+      }
+
+      // Tab trap
+      if (key === 'Tab') {
+        const modalEl = modal.querySelector('.modal');
+        if (!modalEl) return;
+        const focusables = [...modalEl.querySelectorAll(
+          'button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])'
+        )].filter((el) => el.offsetParent !== null);
+        if (!focusables.length) return;
+        const primero = focusables[0];
+        const ultimo = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === primero) {
+          e.preventDefault();
+          ultimo.focus();
+        } else if (!e.shiftKey && document.activeElement === ultimo) {
+          e.preventDefault();
+          primero.focus();
+        }
+        return;
+      }
+
+      // Enter en input normal para confirmar modal (salvo inputs que gestionan su propio Enter)
+      if (key === 'Enter' && !e.shiftKey) {
+        const target = document.activeElement;
+        if (!target || target.tagName !== 'INPUT') return;
+        if (target.id === 'pos-buscar-modal' || target.id === 'cli-buscar-pos') return;
+        if (modal.querySelector('.ac-dropdown.visible')) return;
+
+        const botonPrimario = $('#modal-body')?.querySelector('.actions .btn:not(.ghost):not(.danger), button.btn:not(.ghost):not(.danger)');
+        if (botonPrimario) {
+          e.preventDefault();
+          botonPrimario.click();
+        }
+        return;
+      }
+    }
   });
 }
 
@@ -1537,13 +1856,38 @@ async function anularVenta(id, desdeControl = false) {
 
 // ── Modal helper ──────────────────────────────────────────
 const modal = $('#modal');
+let elementoPrevioModal = null;
+
 function abrirModal(titulo, html) {
+  elementoPrevioModal = document.activeElement;
   $('#modal-title').textContent = titulo;
   $('#modal-body').innerHTML = html;
   modal.classList.remove('compact');
   modal.classList.remove('hidden');
+
+  // Sanitizar autocomplete de los inputs del modal
+  sanitizarAutocompletado($('#modal-body'));
+
+  // Autofocus al primer input visible (con delay para render)
+  setTimeout(() => {
+    const primerInput = $('#modal-body')?.querySelector('input:not([type="hidden"]):not([type="checkbox"]):not([type="radio"]):not(:disabled), select:not(:disabled), textarea:not(:disabled)');
+    if (primerInput) {
+      primerInput.focus();
+      if (primerInput.type !== 'select-one' && primerInput.select) primerInput.select();
+    } else {
+      const primerBoton = $('#modal-body')?.querySelector('button:not(:disabled)');
+      if (primerBoton) primerBoton.focus();
+    }
+  }, 50);
 }
-function cerrarModal() { modal.classList.add('hidden'); checkoutReabrir = false; }
+
+function cerrarModal() {
+  modal.classList.add('hidden');
+  checkoutReabrir = false;
+  if (elementoPrevioModal && elementoPrevioModal.focus && elementoPrevioModal.isConnected) {
+    try { elementoPrevioModal.focus(); } catch (_) {}
+  }
+}
 $('#modal-close').addEventListener('click', () => cerrarModal());
 modal.addEventListener('click', (e) => { if (e.target === modal) cerrarModal(); });
 
@@ -2543,7 +2887,13 @@ async function cargarCaja() {
     const efectivo = caja.total_efectivo ?? caja.total_ingresos;
     const esperado = caja.apertura + efectivo - caja.total_egresos;
     $('#caja-cards').innerHTML = `
-      <div class="card"><div class="valor">${fmtGs(caja.apertura)}</div><div class="etiqueta">Apertura</div></div>
+      <div class="card">
+        <div class="valor">${fmtGs(caja.apertura)}</div>
+        <div class="etiqueta" style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+          <span>Apertura</span>
+          ${caja.estado === 'abierta' ? `<button type="button" class="btn ghost small" style="padding:2px 7px;font-size:11px;height:auto;line-height:1.2;margin:0" onclick="abrirModalEditarApertura(${caja.id}, ${caja.apertura})"><i data-lucide="edit-2" style="width:11px;height:11px"></i> Editar</button>` : ''}
+        </div>
+      </div>
       <div class="card positivo"><div class="valor">${fmtGs(efectivo)}</div><div class="etiqueta">Efectivo</div></div>
       <div class="card"><div class="valor">${fmtGs(caja.total_transferencia || 0)}</div><div class="etiqueta">Transferencias</div></div>
       <div class="card"><div class="valor">${fmtGs(caja.total_tarjeta || 0)}</div><div class="etiqueta">Tarjetas</div></div>
@@ -2594,6 +2944,52 @@ async function cargarCaja() {
     }
   }
   pintarHistorialCajas(historial);
+  reicons();
+}
+
+function abrirModalEditarApertura(cajaId, aperturaActual) {
+  abrirModal('Modificar monto de apertura', `
+    <p class="muted">Apertura registrada actualmente: <b>${fmtGs(aperturaActual)}</b></p>
+    <p class="muted" style="margin-bottom:12px">Si la caja se abrió sin dinero o con un monto equivocado, ingresá el monto real de fondo de caja para corregir el arqueo del día.</p>
+    <div class="form-row">
+      <div class="full">
+        <label>Nuevo monto de apertura (₲)
+          <input type="number" id="mod-apertura-monto" min="0" step="any" value="${aperturaActual || ''}" placeholder="Ej: 150000">
+        </label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="full">
+        <label>Motivo de la corrección
+          <input type="text" id="mod-apertura-motivo" placeholder="Ej: Se abrió con 0 por error / Conteo inicial rectificado">
+        </label>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn ghost" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="confirmarEditarApertura(${cajaId})"><i data-lucide="check"></i> Guardar cambio</button>
+    </div>
+  `);
+  reicons();
+  setTimeout(() => $('#mod-apertura-monto')?.focus(), 50);
+}
+
+async function confirmarEditarApertura(cajaId) {
+  const inputMonto = $('#mod-apertura-monto');
+  const monto = parseFloat(inputMonto?.value);
+  if (!Number.isFinite(monto) || monto < 0) {
+    return toast('Ingresá un monto de apertura válido (0 o mayor)', 'warn');
+  }
+  const motivo = ($('#mod-apertura-motivo')?.value || '').trim() || 'Corrección de monto inicial';
+  try {
+    const r = await put('/api/caja/apertura', bodySucOperativa({ caja_id: cajaId, apertura: monto, motivo }));
+    toast(`Apertura actualizada a ${fmtGs(r.apertura_nueva)}`, 'ok');
+    cerrarModal();
+    cargarCaja();
+    cargarDashboard();
+  } catch (e) {
+    toast(e.message || 'Error al actualizar apertura', 'err');
+  }
 }
 
 $('#btn-abrir-caja').addEventListener('click', async () => {
@@ -2826,106 +3222,493 @@ async function cargarAuditoria(pagina = 1) {
   }
 }
 
-// ── Gastos ────────────────────────────────────────────────
-let gastosFechaFiltro = null;
+// ── Gastos & Proveedores ─────────────────────────────────
+let subtabGastosActual = 'varios';
+let proveedoresGlobal = [];
+let gastosFechaFiltroVarios = fechaHoy();
+let gastosFechaFiltroProveedores = fechaHoy();
+let gastosFiltroProveedorId = '';
 
 async function cargarGastos() {
-  $('#gastos-fecha').value = fechaHoy();
-  gastosFechaFiltro = fechaHoy();
+  if ($('#gastos-fecha-varios')) $('#gastos-fecha-varios').value = gastosFechaFiltroVarios || '';
+  if ($('#gastos-fecha-proveedores')) $('#gastos-fecha-proveedores').value = gastosFechaFiltroProveedores || '';
+  await recargarProveedores();
   await pintarGastos();
 }
 
+async function recargarProveedores() {
+  try {
+    proveedoresGlobal = await api('/api/proveedores');
+  } catch (_) {
+    proveedoresGlobal = [];
+  }
+  const sel = $('#gastos-filtro-proveedor');
+  if (sel) {
+    const valActual = sel.value;
+    sel.innerHTML = '<option value="">Todos los proveedores</option>' +
+      proveedoresGlobal.map((p) => `<option value="${p.id}">${escapeHtml(p.nombre)}${p.rubro ? ` (${escapeHtml(p.rubro)})` : ''}</option>`).join('');
+    sel.value = valActual;
+  }
+}
+
 async function pintarGastos() {
-  $('#tabla-gastos').innerHTML = spinnerHtml();
-  const base = gastosFechaFiltro ? `/api/gastos?fecha=${gastosFechaFiltro}` : '/api/gastos';
-  const gastos = await api(withSucOperativa(base));
+  const tVarios = $('#tabla-gastos-varios');
+  const tProv = $('#tabla-gastos-proveedores');
+  if (tVarios) tVarios.innerHTML = spinnerHtml();
+  if (tProv) tProv.innerHTML = spinnerHtml();
 
-  const totalGastos = gastos.reduce((a, g) => a + g.monto, 0);
-  const porCategoria = {};
-  for (const g of gastos) porCategoria[g.categoria] = (porCategoria[g.categoria] || 0) + g.monto;
+  let qVarios = '/api/gastos?tipo=varios';
+  if (gastosFechaFiltroVarios) qVarios += '&fecha=' + gastosFechaFiltroVarios;
 
-  const catKeys = Object.keys(porCategoria);
-  $('#gastos-cards').innerHTML = `
-    <div class="card negativo"><div class="valor">${fmtGs(totalGastos)}</div><div class="etiqueta">Total gastos${gastosFechaFiltro ? ' del día' : ''}</div></div>
-    <div class="card"><div class="valor">${gastos.length}</div><div class="etiqueta">Registros</div></div>
-    ${catKeys.slice(0, 3).map((cat) => `<div class="card"><div class="valor">${fmtGs(porCategoria[cat])}</div><div class="etiqueta">${cat}</div></div>`).join('')}
-  `;
+  let qProv = '/api/gastos?tipo=proveedor';
+  if (gastosFechaFiltroProveedores) qProv += '&fecha=' + gastosFechaFiltroProveedores;
+  if (gastosFiltroProveedorId) qProv += '&proveedor_id=' + gastosFiltroProveedorId;
 
-  if (!gastos.length) {
-    $('#tabla-gastos').innerHTML = '<thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Monto</th><th>En caja</th><th></th></tr></thead><tbody>' + emptyStateHtml('receipt', 'Sin gastos registrados', gastosFechaFiltro ? 'No hay gastos para esta fecha' : 'Registrá un gasto con el botón +') + '</tbody>';
-    return;
+  const [listVarios, listProveedores] = await Promise.all([
+    api(withSucOperativa(qVarios)).catch(() => []),
+    api(withSucOperativa(qProv)).catch(() => [])
+  ]);
+
+  const totalVarios = listVarios.reduce((acc, g) => acc + g.monto, 0);
+  const totalProveedores = listProveedores.reduce((acc, g) => acc + g.monto, 0);
+  const totalGeneral = totalVarios + totalProveedores;
+  const totalEfectivo = listVarios.concat(listProveedores)
+    .filter((g) => g.forma_pago !== 'transferencia')
+    .reduce((acc, g) => acc + g.monto, 0);
+  const totalTransferencia = listVarios.concat(listProveedores)
+    .filter((g) => g.forma_pago === 'transferencia')
+    .reduce((acc, g) => acc + g.monto, 0);
+
+  if ($('#gastos-cards')) {
+    $('#gastos-cards').innerHTML = `
+      <div class="card negativo"><div class="valor">${fmtGs(totalVarios)}</div><div class="etiqueta">Gastos varios${gastosFechaFiltroVarios ? ' (' + fmtFecha(gastosFechaFiltroVarios) + ')' : ''}</div></div>
+      <div class="card ambar"><div class="valor">${fmtGs(totalProveedores)}</div><div class="etiqueta">Pago a proveedores${gastosFechaFiltroProveedores ? ' (' + fmtFecha(gastosFechaFiltroProveedores) + ')' : ''}</div></div>
+      <div class="card"><div class="valor">${fmtGs(totalGeneral)}</div><div class="etiqueta">Total egresos</div></div>
+      <div class="card positivo"><div class="valor">${fmtGs(totalEfectivo)}</div><div class="etiqueta">Efectivo (Caja)</div></div>
+      <div class="card"><div class="valor">${fmtGs(totalTransferencia)}</div><div class="etiqueta">Transferencias</div></div>
+    `;
   }
 
-  $('#tabla-gastos').innerHTML = '<thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Monto</th><th>En caja</th><th></th></tr></thead><tbody>' +
-    gastos.map((g) => `<tr>
-      <td>${fmtFecha(g.fecha)}</td>
-      <td><span class="tag tarjeta">${escapeHtml(g.categoria)}</span></td>
-      <td>${escapeHtml(g.concepto)}</td>
-      <td><b>${fmtGs(g.monto)}</b></td>
-      <td>${g.caja_id ? '<span class="tag ok"><i data-lucide="check"></i> Sí</span>' : '<span class="tag ticket">No</span>'}</td>
-      <td><button class="btn small danger" onclick="eliminarGasto(${g.id})"><i data-lucide="trash-2"></i></button></td>
-    </tr>`).join('') + '</tbody>';
+  // Render tabla gastos varios
+  if (tVarios) {
+    if (!listVarios.length) {
+      tVarios.innerHTML = '<thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Motivo</th><th>Monto</th><th>Medio de pago</th><th></th></tr></thead><tbody>' + emptyStateHtml('receipt', 'Sin gastos varios registrados', gastosFechaFiltroVarios ? 'No hay gastos varios para esta fecha' : 'Registrá un gasto con el botón superior') + '</tbody>';
+    } else {
+      tVarios.innerHTML = '<thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Motivo</th><th>Monto</th><th>Medio de pago</th><th></th></tr></thead><tbody>' +
+        listVarios.map((g) => `<tr>
+          <td><b>${fmtFecha(g.fecha)}</b></td>
+          <td><span class="tag tarjeta">${escapeHtml(g.categoria)}</span></td>
+          <td>${escapeHtml(g.concepto)}</td>
+          <td class="muted">${g.motivo ? escapeHtml(g.motivo) : '—'}</td>
+          <td style="font-weight:700">${fmtGs(g.monto)}</td>
+          <td>${g.forma_pago === 'transferencia' ? '<span class="tag ticket"><i data-lucide="arrow-right-left"></i> Transferencia</span>' : '<span class="tag ok"><i data-lucide="banknote"></i> Efectivo (Caja)</span>'}</td>
+          <td><button class="btn small danger ghost" onclick="eliminarGasto(${g.id})" title="Eliminar"><i data-lucide="trash-2"></i></button></td>
+        </tr>`).join('') + '</tbody>';
+    }
+  }
+
+  // Render tabla gastos proveedores
+  if (tProv) {
+    if (!listProveedores.length) {
+      tProv.innerHTML = '<thead><tr><th>Fecha</th><th>Proveedor</th><th>Detalle / Insumo</th><th>N° Comprobante</th><th>Monto</th><th>Medio de pago</th><th></th></tr></thead><tbody>' + emptyStateHtml('truck', 'Sin compras o pagos a proveedores', gastosFechaFiltroProveedores ? 'No hay compras registradas para esta fecha' : 'Registrá una compra con el botón superior') + '</tbody>';
+    } else {
+      tProv.innerHTML = '<thead><tr><th>Fecha</th><th>Proveedor</th><th>Detalle / Insumo</th><th>N° Comprobante</th><th>Monto</th><th>Medio de pago</th><th></th></tr></thead><tbody>' +
+        listProveedores.map((g) => `<tr>
+          <td><b>${fmtFecha(g.fecha)}</b></td>
+          <td>
+            <strong>${escapeHtml(g.proveedor_nombre || 'Proveedor')}</strong>
+            ${g.proveedor_rubro ? `<br><small class="muted">${escapeHtml(g.proveedor_rubro)}</small>` : ''}
+          </td>
+          <td>${escapeHtml(g.concepto)}</td>
+          <td>${g.comprobante ? `<code>${escapeHtml(g.comprobante)}</code>` : '<span class="muted">—</span>'}</td>
+          <td style="font-weight:700;color:var(--marron-deep)">${fmtGs(g.monto)}</td>
+          <td>${g.forma_pago === 'transferencia' ? '<span class="tag ticket"><i data-lucide="arrow-right-left"></i> Transferencia</span>' : '<span class="tag ok"><i data-lucide="banknote"></i> Efectivo (Caja)</span>'}</td>
+          <td><button class="btn small danger ghost" onclick="eliminarGasto(${g.id})" title="Eliminar"><i data-lucide="trash-2"></i></button></td>
+        </tr>`).join('') + '</tbody>';
+    }
+  }
+
+  reicons();
 }
 
-$('#btn-nuevo-gasto').addEventListener('click', () => abrirGastoModal());
-$('#btn-gastos-hoy').addEventListener('click', () => {
-  gastosFechaFiltro = fechaHoy();
-  $('#gastos-fecha').value = gastosFechaFiltro;
+// ── Event listeners de la sección Gastos ──────────────────
+$$('#gastos-seg button').forEach((b) => b.addEventListener('click', () => {
+  $$('#gastos-seg button').forEach((x) => x.classList.toggle('activo', x === b));
+  subtabGastosActual = b.dataset.subtab;
+  const esVarios = subtabGastosActual === 'varios';
+  $('#gastos-subtab-varios')?.classList.toggle('hidden', !esVarios);
+  $('#gastos-subtab-proveedores')?.classList.toggle('hidden', esVarios);
+  if ($('#btn-gestionar-proveedores')) $('#btn-gestionar-proveedores').style.display = esVarios ? 'none' : '';
+  if ($('#btn-nuevo-gasto-texto')) $('#btn-nuevo-gasto-texto').textContent = esVarios ? 'Registrar gasto vario' : 'Pago a proveedor';
+  pintarGastos();
+}));
+
+$('#btn-nuevo-gasto')?.addEventListener('click', () => {
+  if (subtabGastosActual === 'proveedores') abrirModalPagoProveedor();
+  else abrirModalGastoVario();
+});
+
+$('#btn-gestionar-proveedores')?.addEventListener('click', () => abrirModalGestionProveedores());
+
+$('#btn-gastos-hoy-varios')?.addEventListener('click', () => {
+  gastosFechaFiltroVarios = fechaHoy();
+  if ($('#gastos-fecha-varios')) $('#gastos-fecha-varios').value = gastosFechaFiltroVarios;
   pintarGastos();
 });
-$('#btn-gastos-todos').addEventListener('click', () => {
-  gastosFechaFiltro = null;
-  $('#gastos-fecha').value = '';
+$('#btn-gastos-todos-varios')?.addEventListener('click', () => {
+  gastosFechaFiltroVarios = null;
+  if ($('#gastos-fecha-varios')) $('#gastos-fecha-varios').value = '';
   pintarGastos();
 });
-$('#gastos-fecha').addEventListener('change', (e) => {
-  gastosFechaFiltro = e.target.value || null;
+$('#gastos-fecha-varios')?.addEventListener('change', (e) => {
+  gastosFechaFiltroVarios = e.target.value || null;
   pintarGastos();
 });
 
-function abrirGastoModal() {
-  const categoriasOpts = ['Sueldos', 'Servicios', 'Insumos varios', 'Mantenimiento', 'Otros']
+$('#btn-gastos-hoy-proveedores')?.addEventListener('click', () => {
+  gastosFechaFiltroProveedores = fechaHoy();
+  if ($('#gastos-fecha-proveedores')) $('#gastos-fecha-proveedores').value = gastosFechaFiltroProveedores;
+  pintarGastos();
+});
+$('#btn-gastos-todos-proveedores')?.addEventListener('click', () => {
+  gastosFechaFiltroProveedores = null;
+  if ($('#gastos-fecha-proveedores')) $('#gastos-fecha-proveedores').value = '';
+  pintarGastos();
+});
+$('#gastos-fecha-proveedores')?.addEventListener('change', (e) => {
+  gastosFechaFiltroProveedores = e.target.value || null;
+  pintarGastos();
+});
+$('#gastos-filtro-proveedor')?.addEventListener('change', (e) => {
+  gastosFiltroProveedorId = e.target.value || '';
+  pintarGastos();
+});
+
+function abrirModalGastoVario() {
+  const cats = ['Servicios', 'Limpieza', 'Mantenimiento', 'Insumos varios', 'Sueldos', 'Viáticos', 'Otros']
     .map((c) => `<option value="${c}">${c}</option>`).join('');
-  abrirModal('Registrar gasto', `
+  abrirModal('Registrar gasto vario', `
     <div class="form-row">
-      <div class="full"><label>Concepto
-        <input id="gasto-concepto" placeholder="Ej: pago de luz eléctrica"></label></div>
+      <div class="full">
+        <label>Concepto del gasto
+          <input id="gv-concepto" placeholder="Ej: Artículos de limpieza, Hielo, Reparación canilla">
+        </label>
+      </div>
     </div>
     <div class="form-row">
-      <div><label>Categoría
-        <select id="gasto-categoria">${categoriasOpts}</select></label></div>
-      <div><label>Monto (₲)
-        <input type="number" id="gasto-monto" placeholder="0"></label></div>
+      <div>
+        <label>Categoría
+          <select id="gv-categoria">${cats}</select>
+        </label>
+      </div>
+      <div>
+        <label>Monto (₲)
+          <input type="number" id="gv-monto" min="1" step="any" placeholder="0">
+        </label>
+      </div>
     </div>
     <div class="form-row">
-      <div class="full"><label>Fecha (vacío = hoy)
-        <input type="date" id="gasto-fecha"></label></div>
+      <div>
+        <label>Medio de pago
+          <select id="gv-forma-pago">
+            <option value="efectivo">Efectivo (se descuenta de la caja abierta)</option>
+            <option value="transferencia">Transferencia bancaria (no descuenta de caja)</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <label>Fecha (vacío = hoy)
+          <input type="date" id="gv-fecha" value="${fechaHoy()}">
+        </label>
+      </div>
     </div>
-    <p class="muted" style="margin-top:4px"><i data-lucide="info" style="width:13px;height:13px;vertical-align:-2px"></i> Si hay una caja abierta para esa fecha, el gasto se registra como egreso de caja.</p>
-    <button class="btn" style="width:100%;margin-top:16px" onclick="guardarGasto()"><i data-lucide="save"></i> Registrar gasto</button>
+    <div class="form-row">
+      <div class="full">
+        <label>Motivo u observaciones (opcional)
+          <input id="gv-motivo" placeholder="Ej: Se compró lavandina y trapos porque se terminó el stock">
+        </label>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn ghost" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarGastoVario()"><i data-lucide="save"></i> Registrar gasto</button>
+    </div>
   `);
+  reicons();
+  setTimeout(() => $('#gv-concepto')?.focus(), 50);
 }
 
-async function guardarGasto() {
+async function guardarGastoVario() {
+  const concepto = ($('#gv-concepto')?.value || '').trim();
+  const monto = parseFloat($('#gv-monto')?.value);
+  if (!concepto) return toast('Ingresá el concepto del gasto', 'warn');
+  if (!Number.isFinite(monto) || monto <= 0) return toast('Ingresá un monto válido mayor a 0', 'warn');
+
   const body = bodySucOperativa({
-    concepto: $('#gasto-concepto').value.trim(),
-    categoria: $('#gasto-categoria').value,
-    monto: parseFloat($('#gasto-monto').value),
-    fecha: $('#gasto-fecha').value || undefined
+    tipo: 'varios',
+    concepto,
+    categoria: $('#gv-categoria')?.value || 'Otros',
+    motivo: ($('#gv-motivo')?.value || '').trim(),
+    monto,
+    forma_pago: $('#gv-forma-pago')?.value || 'efectivo',
+    fecha: $('#gv-fecha')?.value || fechaHoy()
   });
+
   try {
     await post('/api/gastos', body);
-    modal.classList.add('hidden');
-    toast('Gasto registrado', 'ok');
+    cerrarModal();
+    toast('Gasto vario registrado correctamente', 'ok');
     pintarGastos();
     cargarDashboard();
-  } catch (e) { toast(e.message, 'err'); }
+    cargarCaja();
+  } catch (e) {
+    toast(e.message || 'Error al guardar gasto', 'err');
+  }
+}
+
+function abrirModalPagoProveedor() {
+  if (!proveedoresGlobal.length) {
+    return abrirModalNuevoProveedor(true);
+  }
+  const provsOpts = proveedoresGlobal.map((p) =>
+    `<option value="${p.id}">${escapeHtml(p.nombre)}${p.rubro ? ` · ${escapeHtml(p.rubro)}` : ''}</option>`
+  ).join('');
+
+  abrirModal('Registrar pago a proveedor', `
+    <div class="form-row">
+      <div class="full">
+        <div style="display:flex;align-items:flex-end;gap:8px">
+          <div style="flex:1">
+            <label>Proveedor
+              <select id="pp-proveedor" class="pos-select full">${provsOpts}</select>
+            </label>
+          </div>
+          <button type="button" class="btn ghost small" style="margin-bottom:10px" onclick="abrirModalNuevoProveedor(true)"><i data-lucide="plus"></i> Nuevo proveedor</button>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="full">
+        <label>Detalle / Insumos adquiridos
+          <input id="pp-concepto" placeholder="Ej: 10 bolsas harina 000, 2 cajas levadura">
+        </label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Monto total (₲)
+          <input type="number" id="pp-monto" min="1" step="any" placeholder="0">
+        </label>
+      </div>
+      <div>
+        <label>N° Factura / Remisión (opcional)
+          <input id="pp-comprobante" placeholder="Ej: 001-001-0001234">
+        </label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Medio de pago
+          <select id="pp-forma-pago">
+            <option value="transferencia">Transferencia bancaria (no descuenta de caja)</option>
+            <option value="efectivo">Efectivo (se retira del cajón de la caja abierta)</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <label>Fecha (vacío = hoy)
+          <input type="date" id="pp-fecha" value="${fechaHoy()}">
+        </label>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn ghost" onclick="cerrarModal()">Cancelar</button>
+      <button class="btn" onclick="guardarPagoProveedor()"><i data-lucide="save"></i> Registrar pago</button>
+    </div>
+  `);
+  reicons();
+  setTimeout(() => $('#pp-concepto')?.focus(), 50);
+}
+
+async function guardarPagoProveedor() {
+  const proveedorId = parseInt($('#pp-proveedor')?.value, 10);
+  const concepto = ($('#pp-concepto')?.value || '').trim();
+  const monto = parseFloat($('#pp-monto')?.value);
+  if (!proveedorId) return toast('Seleccioná un proveedor', 'warn');
+  if (!concepto) return toast('Ingresá el detalle o concepto de la compra', 'warn');
+  if (!Number.isFinite(monto) || monto <= 0) return toast('Ingresá un monto válido mayor a 0', 'warn');
+
+  const body = bodySucOperativa({
+    tipo: 'proveedor',
+    proveedor_id: proveedorId,
+    concepto,
+    comprobante: ($('#pp-comprobante')?.value || '').trim(),
+    monto,
+    forma_pago: $('#pp-forma-pago')?.value || 'transferencia',
+    fecha: $('#pp-fecha')?.value || fechaHoy()
+  });
+
+  try {
+    await post('/api/gastos', body);
+    cerrarModal();
+    toast('Pago a proveedor registrado correctamente', 'ok');
+    pintarGastos();
+    cargarDashboard();
+    cargarCaja();
+  } catch (e) {
+    toast(e.message || 'Error al registrar pago', 'err');
+  }
+}
+
+function abrirModalGestionProveedores() {
+  const renderTabla = (lista) => {
+    if (!lista.length) return emptyStateHtml('truck', 'Sin proveedores cargados', 'Agregá proveedores con el botón superior');
+    return `<table>
+      <thead><tr><th>Nombre</th><th>Rubro</th><th>Contacto / Teléfono</th><th>RUC</th><th></th></tr></thead>
+      <tbody>
+        ${lista.map((p) => `<tr>
+          <td><strong>${escapeHtml(p.nombre)}</strong>${p.direccion ? `<br><small class="muted">${escapeHtml(p.direccion)}</small>` : ''}</td>
+          <td><span class="tag tarjeta">${escapeHtml(p.rubro || 'General')}</span></td>
+          <td>${escapeHtml(p.contacto || '')}${p.telefono ? `<br><small><i data-lucide="phone" style="width:11px;height:11px"></i> ${escapeHtml(p.telefono)}</small>` : ''}</td>
+          <td>${p.ruc ? `<code>${escapeHtml(p.ruc)}</code>` : '<span class="muted">—</span>'}</td>
+          <td><div class="actions">
+            <button class="btn small ghost" onclick="abrirModalNuevoProveedor(false, ${p.id})" title="Editar"><i data-lucide="edit-2"></i></button>
+            <button class="btn small danger ghost" onclick="eliminarProveedor(${p.id})" title="Dar de baja"><i data-lucide="trash-2"></i></button>
+          </div></td>
+        </tr>`).join('')}
+      </tbody>
+    </table>`;
+  };
+
+  abrirModal('Gestión de Proveedores', `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;gap:12px;flex-wrap:wrap">
+      <input type="text" id="prov-buscar-input" class="buscar" placeholder="Buscar proveedor por nombre, rubro o RUC..." style="max-width:320px;margin:0">
+      <button class="btn" onclick="abrirModalNuevoProveedor(false)"><i data-lucide="plus"></i> Nuevo proveedor</button>
+    </div>
+    <div id="prov-tabla-container" style="max-height:400px;overflow-y:auto;border:1px solid var(--borde);border-radius:var(--radius-sm)">
+      ${renderTabla(proveedoresGlobal)}
+    </div>
+  `);
+  reicons();
+
+  $('#prov-buscar-input')?.addEventListener('input', (e) => {
+    const q = e.target.value.toLowerCase().trim();
+    const filtrados = proveedoresGlobal.filter((p) =>
+      p.nombre.toLowerCase().includes(q) ||
+      (p.rubro || '').toLowerCase().includes(q) ||
+      (p.ruc || '').toLowerCase().includes(q) ||
+      (p.contacto || '').toLowerCase().includes(q)
+    );
+    $('#prov-tabla-container').innerHTML = renderTabla(filtrados);
+    reicons();
+  });
+}
+
+function abrirModalNuevoProveedor(volverAPago = false, proveedorId = null) {
+  const p = proveedorId ? (proveedoresGlobal.find((x) => x.id === proveedorId) || {}) : {};
+  const esEdicion = !!proveedorId;
+
+  abrirModal(esEdicion ? `Editar proveedor — ${p.nombre}` : 'Nuevo proveedor', `
+    <div class="form-row">
+      <div class="full">
+        <label>Nombre del proveedor / Empresa
+          <input id="np-nombre" value="${escapeHtml(p.nombre || '')}" placeholder="Ej: Molinos Asunción S.A.">
+        </label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Rubro principal
+          <input id="np-rubro" value="${escapeHtml(p.rubro || '')}" placeholder="Ej: Harinas, Levaduras, Lácteos, Packaging">
+        </label>
+      </div>
+      <div>
+        <label>RUC (opcional)
+          <input id="np-ruc" value="${escapeHtml(p.ruc || '')}" placeholder="Ej: 80012345-6">
+        </label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div>
+        <label>Teléfono / WhatsApp
+          <input id="np-telefono" value="${escapeHtml(p.telefono || '')}" placeholder="Ej: 0981-123456">
+        </label>
+      </div>
+      <div>
+        <label>Persona de contacto / Vendedor
+          <input id="np-contacto" value="${escapeHtml(p.contacto || '')}" placeholder="Ej: Carlos Gómez">
+        </label>
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="full">
+        <label>Dirección (opcional)
+          <input id="np-direccion" value="${escapeHtml(p.direccion || '')}" placeholder="Ej: Av. Fernando de la Mora 450">
+        </label>
+      </div>
+    </div>
+    <div class="actions" style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn ghost" onclick="${volverAPago ? 'abrirModalPagoProveedor()' : 'abrirModalGestionProveedores()'}">Cancelar</button>
+      <button class="btn" onclick="guardarProveedor(${esEdicion ? p.id : 'null'}, ${volverAPago})"><i data-lucide="save"></i> ${esEdicion ? 'Actualizar' : 'Guardar proveedor'}</button>
+    </div>
+  `);
+  reicons();
+  setTimeout(() => $('#np-nombre')?.focus(), 50);
+}
+
+async function guardarProveedor(id, volverAPago) {
+  const nombre = ($('#np-nombre')?.value || '').trim();
+  if (!nombre) return toast('Ingresá el nombre del proveedor', 'warn');
+
+  const datos = {
+    nombre,
+    rubro: ($('#np-rubro')?.value || '').trim(),
+    ruc: ($('#np-ruc')?.value || '').trim(),
+    telefono: ($('#np-telefono')?.value || '').trim(),
+    contacto: ($('#np-contacto')?.value || '').trim(),
+    direccion: ($('#np-direccion')?.value || '').trim(),
+  };
+
+  try {
+    if (id) {
+      await put('/api/proveedores/' + id, datos);
+      toast('Proveedor actualizado', 'ok');
+    } else {
+      await post('/api/proveedores', datos);
+      toast('Proveedor creado', 'ok');
+    }
+    await recargarProveedores();
+    if (volverAPago) {
+      abrirModalPagoProveedor();
+    } else {
+      abrirModalGestionProveedores();
+    }
+  } catch (e) {
+    toast(e.message || 'Error al guardar proveedor', 'err');
+  }
+}
+
+async function eliminarProveedor(id) {
+  if (!await confirmarAccion({
+    titulo: 'Desactivar proveedor',
+    mensaje: '¿Deseas dar de baja este proveedor? Los pagos y compras históricas no se borrarán.',
+    aceptar: 'Desactivar',
+    peligro: true,
+  })) return;
+  try {
+    await del('/api/proveedores/' + id);
+    toast('Proveedor dado de baja', 'warn');
+    await recargarProveedores();
+    abrirModalGestionProveedores();
+  } catch (e) {
+    toast(e.message || 'Error al desactivar proveedor', 'err');
+  }
 }
 
 async function eliminarGasto(id) {
   if (!await confirmarAccion({
     titulo: 'Eliminar gasto',
-    mensaje: '¿Eliminar este gasto? Si fue registrado en caja, también se revertirá el egreso.',
+    mensaje: '¿Eliminar este registro? Si afectó a la caja, también se revertirá el egreso.',
     aceptar: 'Eliminar gasto',
     peligro: true,
   })) return;
@@ -2934,6 +3717,7 @@ async function eliminarGasto(id) {
     toast('Gasto eliminado', 'warn');
     pintarGastos();
     cargarDashboard();
+    cargarCaja();
   } catch (e) {
     toast(e.message, 'err');
   }
@@ -2971,6 +3755,7 @@ $('#btn-quitar-logo')?.addEventListener('click', () => { cfgLogo = ''; pintarLog
 
 async function cargarConfig() {
   const cfg = await api('/api/config');
+  configGlobal = cfg;
   $('#cfg-usuario').textContent = usuarioActual || '—';
   $('#cfg-nombre').value = cfg.nombre_negocio || '';
   $('#cfg-ruc').value = cfg.ruc || '';
@@ -2978,6 +3763,9 @@ async function cargarConfig() {
   $('#cfg-direccion').value = cfg.direccion || '';
   $('#cfg-telefono').value = cfg.telefono || '';
   $('#cfg-ciudad').value = cfg.ciudad || '';
+  if ($('#cfg-permitir-sin-stock')) {
+    $('#cfg-permitir-sin-stock').checked = cfg.permitir_venta_sin_stock === undefined || Number(cfg.permitir_venta_sin_stock) === 1;
+  }
   cfgLogo = cfg.logo || '';
   pintarLogoPref();
 
@@ -3302,8 +4090,10 @@ $('#btn-guardar-config').addEventListener('click', async () => {
       nombre_negocio: $('#cfg-nombre').value, ruc: $('#cfg-ruc').value,
       actividad_economica: $('#cfg-actividad').value, direccion: $('#cfg-direccion').value,
       telefono: $('#cfg-telefono').value, ciudad: $('#cfg-ciudad').value,
-      logo: cfgLogo
+      logo: cfgLogo,
+      permitir_venta_sin_stock: $('#cfg-permitir-sin-stock')?.checked ? 1 : 0
     });
+    configGlobal = await api('/api/config');
     toast('Configuración guardada', 'ok');
     msg($('#cfg-msg'), 'Configuración guardada');
   } catch (e) {
