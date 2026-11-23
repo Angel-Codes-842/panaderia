@@ -1059,6 +1059,16 @@ summary:focus-visible {
   outline-offset: 2px;
 }
 
+/* Filas navegables con flechas (tablas y carrito del POS) */
+tr.fila-nav,
+tr.fila-carrito { cursor: pointer; }
+tr.fila-nav:focus,
+tr.fila-carrito:focus {
+  outline: 2px solid var(--ambar);
+  outline-offset: -2px;
+  background: var(--crema);
+}
+
 .pos-search-result:hover:not(:disabled),
 .pos-search-result:focus-visible:not(:disabled),
 .pos-search-result.activo:not(:disabled) {

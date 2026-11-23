@@ -217,6 +217,45 @@ function escapeAttr(s) {
   return escapeHtml(s).replace(/`/g, '&#96;');
 }
 
+// ── Navegación por teclado en tablas ──────────────────────
+// Flechas arriba/abajo recorren las filas marcadas con .fila-nav; Enter ejecuta
+// el botón principal (el de "Editar", cuando existe) o enfoca la primera acción.
+function hacerTablaNavegable(tablaId) {
+  const tabla = document.getElementById(tablaId);
+  if (!tabla || tabla.dataset.navListo === '1') return;
+  tabla.dataset.navListo = '1';
+  tabla.addEventListener('keydown', (e) => {
+    const fila = e.target.closest('tr.fila-nav');
+    if (!fila) return;
+    const filas = [...tabla.querySelectorAll('tr.fila-nav')];
+    const idx = filas.indexOf(fila);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const destino = e.key === 'ArrowDown'
+        ? Math.min(filas.length - 1, idx + 1)
+        : Math.max(0, idx - 1);
+      filas[destino]?.focus();
+    } else if (e.key === 'Enter') {
+      const principal = fila.querySelector('[data-accion-principal]');
+      const accion = principal || fila.querySelector('button');
+      if (!accion || accion.disabled) return;
+      e.preventDefault();
+      if (principal) accion.click();
+      else accion.focus();
+    } else if (e.key === 'Escape') {
+      fila.blur();
+    }
+  });
+}
+
+function enfocarPrimeraFila(tablaId, e) {
+  const fila = document.querySelector(`#${tablaId} tr.fila-nav`);
+  if (!fila) return false;
+  if (e) e.preventDefault();
+  fila.focus();
+  return true;
+}
+
 // ── Toast System ──────────────────────────────────────────
 const TOAST_ICONS = { ok: 'check-circle', err: 'x-circle', warn: 'alert-triangle', info: 'info' };
 function toast(texto, tipo = 'info', duracion = 3500) {
@@ -1087,7 +1126,7 @@ function pintarCarrito() {
     const linea = importesCarrito.get(id) ?? p.precio_venta * cant;
     subtotal += linea;
     const cantShow = cant.toLocaleString('es-PY', { minimumFractionDigits: 0, maximumFractionDigits: 3 });
-    return `<tr>
+    return `<tr class="fila-carrito" tabindex="0" data-id="${id}" title="Flechas: cambiar cantidad · Enter: ir a cobrar">
       <td>${escapeHtml(p.nombre)}</td>
       <td class="center">
         <div class="qty-control">
@@ -1122,6 +1161,47 @@ function calcularTotalBoutique() {
 $('#pos-descuento')?.addEventListener('input', calcularTotalBoutique);
 
 const pintarTicket = pintarCarrito;
+
+// El carrito se vuelve a dibujar al cambiar cantidades: devolver el foco a la
+// fila correspondiente para poder seguir navegando sin tocar el mouse.
+function enfocarFilaCarrito(id) {
+  $(`#pos-cart-body tr.fila-carrito[data-id="${id}"]`)?.focus();
+}
+
+function instalarNavegacionCarrito() {
+  const body = $('#pos-cart-body');
+  if (!body || body.dataset.navListo === '1') return;
+  body.dataset.navListo = '1';
+  body.addEventListener('keydown', (e) => {
+    const fila = e.target.closest('tr.fila-carrito');
+    if (!fila) return;
+    const id = Number(fila.dataset.id);
+    const filas = [...body.querySelectorAll('tr.fila-carrito')];
+    const idx = filas.indexOf(fila);
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      const destino = e.key === 'ArrowDown' ? Math.min(filas.length - 1, idx + 1) : Math.max(0, idx - 1);
+      filas[destino]?.focus();
+    } else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      cambiarCant(id, e.key === 'ArrowRight' ? 1 : -1);
+      requestAnimationFrame(() => {
+        if (carrito.has(id)) {
+          enfocarFilaCarrito(id);
+        } else {
+          const restantes = [...body.querySelectorAll('tr.fila-carrito')];
+          restantes[Math.min(idx, restantes.length - 1)]?.focus();
+        }
+      });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const rec = $('#pos-recibido');
+      if (rec) { rec.focus(); rec.select(); }
+    } else if (e.key === 'Escape') {
+      fila.blur();
+    }
+  });
+}
 
 function quitarDelTicket(id) {
   carrito.delete(id);
@@ -1941,14 +2021,14 @@ function pintarTablaProductos(lista) {
     return;
   }
   $('#tabla-productos').innerHTML = '<thead><tr><th>Código (opcional)</th><th>Producto</th><th>Categoría</th><th>Stock</th><th>Precio</th><th>Acciones</th></tr></thead><tbody>' +
-    lista.map((p) => `<tr>
+    lista.map((p) => `<tr class="fila-nav" tabindex="0" title="Flechas: recorrer · Enter: editar">
       <td>${p.codigo ? `<code>${escapeHtml(p.codigo)}</code>` : '<span class="muted">—</span>'}</td>
       <td><b>${escapeHtml(p.nombre)}</b></td><td>${escapeHtml(p.categoria)}</td>
       <td>${unidadLabel(p.unidad, p.stock)}</td>
       <td><b>${fmtGs(p.precio_venta)}${p.unidad === 'kg' ? '/kg' : p.unidad === 'docena' ? '/doc' : ''}</b></td>
       <td><div class="actions">
         ${esDueño ? `<button class="btn small ghost" onclick="costearProductoDirecto(${p.id})" title="Costear receta y fijar precio"><i data-lucide="calculator"></i> Costeo</button>` : ''}
-        <button class="btn small ghost" onclick="abrirProductoModal(${p.id})"><i data-lucide="pencil"></i> Editar</button>
+        <button class="btn small ghost" data-accion-principal onclick="abrirProductoModal(${p.id})"><i data-lucide="pencil"></i> Editar</button>
         <button class="btn small ghost" onclick="ajustarStockProducto(${p.id})"><i data-lucide="package-plus"></i> Ajustar stock</button>
         <button class="btn small danger" onclick="eliminarProducto(${p.id})"><i data-lucide="trash-2"></i></button>
       </div></td></tr>`).join('') + '</tbody>';
@@ -1977,6 +2057,9 @@ async function cargarProductos() {
   input.oninput = () => {
     const q = input.value.toLowerCase();
     pintarTablaProductos(q ? productosGlobal.filter((p) => (p.nombre || '').toLowerCase().includes(q) || (p.categoria || '').toLowerCase().includes(q) || (p.codigo || '').toLowerCase().includes(q)) : productosGlobal);
+  };
+  input.onkeydown = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter') enfocarPrimeraFila('tabla-productos', e);
   };
 }
 
@@ -2216,13 +2299,13 @@ function pintarTablaClientes(lista) {
     return;
   }
   $('#tabla-clientes').innerHTML = '<thead><tr><th>Nombre</th><th>Documento</th><th>Teléfono</th><th>Compras</th><th>Total comprado</th><th>Acciones</th></tr></thead><tbody>' +
-    lista.map((c) => `<tr>
+    lista.map((c) => `<tr class="fila-nav" tabindex="0" title="Flechas: recorrer · Enter: editar">
       <td><b>${escapeHtml(c.nombre) || '<i>Consumidor Final</i>'}</b></td>
       <td>${escapeHtml(c.tipo_documento)} ${escapeHtml(c.documento) || '—'}</td>
       <td>${escapeHtml(c.telefono) || '—'}</td>
       <td>${c.ventas}</td><td><b>${fmtGs(c.total_compras)}</b></td>
       <td><div class="actions">
-        <button class="btn small ghost" onclick="abrirClienteModal(${c.id})"><i data-lucide="pencil"></i> Editar</button>
+        <button class="btn small ghost" data-accion-principal onclick="abrirClienteModal(${c.id})"><i data-lucide="pencil"></i> Editar</button>
         <button class="btn small danger" onclick="eliminarCliente(${c.id})"><i data-lucide="trash-2"></i></button>
       </div></td></tr>`).join('') + '</tbody>';
 }
@@ -2244,6 +2327,9 @@ async function cargarClientes() {
       (c.documento || '').toLowerCase().includes(q) ||
       (c.telefono || '').toLowerCase().includes(q)
     ) : clientesGlobal);
+  };
+  input.onkeydown = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter') enfocarPrimeraFila('tabla-clientes', e);
   };
 }
 
@@ -3332,7 +3418,7 @@ async function pintarGastos() {
       tVarios.innerHTML = '<thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Motivo</th><th>Monto</th><th>Medio de pago</th><th></th></tr></thead><tbody>' + emptyStateHtml('receipt', 'Sin gastos varios registrados', gastosFechaFiltroVarios ? 'No hay gastos varios para esta fecha' : 'Registrá un gasto con el botón superior') + '</tbody>';
     } else {
       tVarios.innerHTML = '<thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Motivo</th><th>Monto</th><th>Medio de pago</th><th></th></tr></thead><tbody>' +
-        listVarios.map((g) => `<tr>
+        listVarios.map((g) => `<tr class="fila-nav" tabindex="0" title="Flechas: recorrer · Enter: acciones de la fila">
           <td><b>${fmtFecha(g.fecha)}</b></td>
           <td><span class="tag tarjeta">${escapeHtml(g.categoria)}</span></td>
           <td>${escapeHtml(g.concepto)}</td>
@@ -3350,7 +3436,7 @@ async function pintarGastos() {
       tProv.innerHTML = '<thead><tr><th>Fecha</th><th>Proveedor</th><th>Detalle / Insumo</th><th>N° Comprobante</th><th>Monto</th><th>Medio de pago</th><th></th></tr></thead><tbody>' + emptyStateHtml('truck', 'Sin compras o pagos a proveedores', gastosFechaFiltroProveedores ? 'No hay compras registradas para esta fecha' : 'Registrá una compra con el botón superior') + '</tbody>';
     } else {
       tProv.innerHTML = '<thead><tr><th>Fecha</th><th>Proveedor</th><th>Detalle / Insumo</th><th>N° Comprobante</th><th>Monto</th><th>Medio de pago</th><th></th></tr></thead><tbody>' +
-        listProveedores.map((g) => `<tr>
+        listProveedores.map((g) => `<tr class="fila-nav" tabindex="0" title="Flechas: recorrer · Enter: acciones de la fila">
           <td><b>${fmtFecha(g.fecha)}</b></td>
           <td>
             <strong>${escapeHtml(g.proveedor_nombre || 'Proveedor')}</strong>
@@ -4164,6 +4250,8 @@ $('#btn-reset-demo').addEventListener('click', async () => {
 
 // ── Arranque ──────────────────────────────────────────────
 async function arrancar() {
+  ['tabla-productos', 'tabla-clientes', 'tabla-gastos-varios', 'tabla-gastos-proveedores'].forEach(hacerTablaNavegable);
+  instalarNavegacionCarrito();
   try {
     const r = await api('/api/auth/session');
     ocultarLogin(r.usuario, r);
