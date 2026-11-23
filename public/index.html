@@ -249,8 +249,11 @@
                 </div>
 
                 <div class="pos-field" id="pos-recibido-group">
-                  <label id="pos-recibido-label">Monto recibido</label>
-                  <input type="number" id="pos-recibido" class="pos-input" placeholder="0" autocomplete="off" autocorrect="off" spellcheck="false">
+                  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                    <label id="pos-recibido-label">Monto recibido (editable)</label>
+                    <button type="button" class="btn ghost small" id="btn-recibido-total" style="padding:2px 8px;font-size:11px" title="Volver al total exacto de la venta" onclick="usarTotalRecibido()">Usar total</button>
+                  </div>
+                  <input type="number" id="pos-recibido" class="pos-input" placeholder="0" autocomplete="off" autocorrect="off" spellcheck="false" min="0" step="any">
                 </div>
 
                 <div class="pos-vuelto" id="pos-vuelto-wrap" style="display:none">

@@ -703,25 +703,37 @@ async function cargarDashboard() {
 
 // ── POS ───────────────────────────────────────────────────
 let posClienteSel = null;
+let posRecibidoManual = false; // El operador editó el importe (billete de mayor denominación)
 
 async function cargarPos() {
+  posRecibidoManual = false;
   [productosGlobal, clientesGlobal, configGlobal] = await Promise.all([api('/api/productos'), api('/api/clientes'), obtenerConfig()]);
   cargarCarritoGuardado();
   const fpago = $('#pos-forma-pago');
-  if (fpago) { fpago.value = 'efectivo'; fpago.onchange = calcularVuelto; }
+  if (fpago) {
+    fpago.value = 'efectivo';
+    fpago.onchange = () => {
+      posRecibidoManual = false;
+      const rec = $('#pos-recibido');
+      // El importe precargado corresponde al efectivo; en crédito es un abono opcional.
+      if (rec && fpago.value !== 'efectivo') rec.value = '';
+      calcularVuelto();
+    };
+  }
   const recibido = $('#pos-recibido');
   if (recibido) {
     recibido.value = '';
-    recibido.oninput = calcularVuelto;
+    posRecibidoManual = false;
+    recibido.oninput = () => {
+      // Si cambian el importe a mano, conservarlo aunque cambie el total.
+      posRecibidoManual = true;
+      calcularVuelto();
+    };
     recibido.onkeydown = (e) => {
       if (e.key === 'Enter') {
         e.preventDefault();
         const { total } = calcularTotalNumerico();
-        const recVal = Number(recibido.value || 0);
-        if (!recVal && total > 0) {
-          recibido.value = total;
-          calcularVuelto();
-        }
+        if (!Number(recibido.value || 0) && total > 0) autocompletarRecibido(total, true);
         const btn = $('#btn-vender');
         if (btn && !btn.disabled) btn.click();
       }
@@ -1134,6 +1146,7 @@ function nuevaVentaPOS() {
   actualizarClientePOS();
   const rec = $('#pos-recibido');
   if (rec) rec.value = '';
+  posRecibidoManual = false;
   const fp = $('#pos-forma-pago');
   if (fp) fp.value = 'efectivo';
   ['efectivo', 'transferencia', 'tarjeta'].forEach((medio) => {
@@ -1231,10 +1244,7 @@ if (typeof document !== 'undefined') {
       if (fp === 'efectivo') {
         const { total } = calcularTotalNumerico();
         const rec = $('#pos-recibido');
-        if (rec && !Number(rec.value || 0) && total > 0) {
-          rec.value = total;
-          calcularVuelto();
-        }
+        if (rec && !Number(rec.value || 0) && total > 0) autocompletarRecibido(total, true);
       }
       $('#btn-vender')?.click();
       return;
@@ -1330,18 +1340,39 @@ function aplicarClientePOS() {
   cerrarModal();
 }
 
+// Precarga el importe recibido con el total a cobrar. Si el operador ya lo
+// editó (porque entregan un billete mayor), respeta su valor; `forzar` se usa
+// para volver al total exacto desde el botón "Usar total" o los atajos.
+function autocompletarRecibido(total, forzar = false) {
+  const rec = $('#pos-recibido');
+  if (!rec || (posRecibidoManual && !forzar)) return;
+  const valor = Math.round(Number(total || 0) * 100) / 100;
+  const texto = valor ? String(valor) : '';
+  if (rec.value !== texto) rec.value = texto;
+  if (forzar) posRecibidoManual = false;
+}
+
+function usarTotalRecibido() {
+  const { total } = calcularTotalNumerico();
+  autocompletarRecibido(total, true);
+  $('#pos-recibido')?.focus();
+}
+
 function calcularVuelto() {
   const fp = $('#pos-forma-pago')?.value || 'efectivo';
   const mixtos = $('#pos-pagos-mixtos');
   const recEl = $('#pos-recibido');
   const grp = $('#pos-recibido-group');
   const label = $('#pos-recibido-label');
+  const btnTotal = $('#btn-recibido-total');
   const wrap = $('#pos-vuelto-wrap');
   const val = $('#pos-vuelto');
   const swrap = $('#pos-saldo-wrap');
   const sval = $('#pos-saldo');
   const { totalNum } = (function () { const t = $('#pos-total-pagar')?.textContent || '₲ 0'; return { totalNum: Number(String(t).replace(/[^0-9]/g, '')) }; })();
   if (mixtos) mixtos.style.display = fp === 'mixto' ? 'block' : 'none';
+  if (btnTotal) btnTotal.style.display = fp === 'efectivo' ? '' : 'none';
+  if (fp === 'efectivo') autocompletarRecibido(totalNum);
   if (swrap) swrap.style.display = 'none';
   if (fp === 'mixto') {
     if (grp) grp.style.display = 'none';
@@ -1362,7 +1393,7 @@ function calcularVuelto() {
   }
   if (fp === 'efectivo') {
     if (grp) grp.style.display = 'flex';
-    if (label) label.textContent = 'Monto recibido';
+    if (label) label.textContent = 'Monto recibido (editable)';
     const recibido = Number(recEl?.value || 0);
     if (recibido >= totalNum && totalNum > 0) {
       if (wrap) wrap.style.display = 'flex';
@@ -1465,11 +1496,15 @@ function abrirCheckout(clientePreseleccionado) {
     }
   };
   tipo.addEventListener('change', () => { aviso.style.display = tipo.value === 'factura' ? 'block' : 'none'; });
-  pago.addEventListener('change', recalcular);
+  pago.addEventListener('change', () => {
+    if (pago.value === 'efectivo' && !recibido.value) recibido.value = total;
+    recalcular();
+  });
   recibido.addEventListener('input', recalcular);
   ['efectivo', 'transferencia', 'tarjeta'].forEach((medio) => {
     $(`#co-pago-${medio}`).addEventListener('input', recalcular);
   });
+  if (pago.value === 'efectivo') recibido.value = total;
   recalcular();
   reicons();
 }
@@ -2098,6 +2133,7 @@ async function cobrarBoutique(tipo, fp, pagos) {
     actualizarClientePOS();
     const rec = $('#pos-recibido');
     if (rec) rec.value = '';
+    posRecibidoManual = false;
     ['efectivo', 'transferencia', 'tarjeta'].forEach((medio) => {
       const input = $(`#pos-pago-${medio}`);
       if (input) input.value = '';
@@ -2158,6 +2194,7 @@ async function confirmarVentaBoutique(total, formaPago, tipo, clienteId) {
     actualizarClientePOS();
     const rec = $('#pos-recibido');
     if (rec) rec.value = '';
+    posRecibidoManual = false;
     const descEl = $('#pos-descuento');
     if (descEl) descEl.value = 0;
     pintarCarrito();
