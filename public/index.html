@@ -168,10 +168,15 @@
             <span id="pos-cliente-nombre-top">Sin cliente</span>
             <kbd class="pos-kbd">F4</kbd>
           </button>
-          <select id="pos-tipo-comprobante" class="pos-select">
+          <select id="pos-tipo-comprobante" class="pos-select" title="Tipo de comprobante a emitir">
             <option value="ticket">Ticket</option>
             <option value="factura">Factura</option>
           </select>
+        </div>
+
+        <div class="pos-comprobante-aviso ok" id="pos-comprobante-aviso">
+          <i data-lucide="receipt"></i>
+          <span style="flex:1">Ticket interno · se emite a Consumidor Final</span>
         </div>
 
         <div class="pos-main-grid">

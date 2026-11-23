@@ -1011,6 +1011,25 @@ app.put('/api/config', requireDueño, h(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Estado fiscal liviano para el POS: disponible para cualquier usuario que
+// vende, sin exponer el detalle de la configuración (ese endpoint es de dueño).
+app.get('/api/config/fiscal/estado', h(async (req, res) => {
+  const sucursalId = sucursalOperativa(req);
+  const [negocio, fiscal, ultimo] = await Promise.all([
+    db.get(`SELECT nombre_negocio, ruc, actividad_economica FROM configuracion WHERE id = 1`),
+    db.get(`SELECT timbrado, timbrado_vigencia, establecimiento, punto_expedicion, numero_desde, numero_hasta
+            FROM configuracion_fiscal WHERE sucursal_id = $1`, [sucursalId]),
+    db.get(`SELECT MAX(numero_comprobante) AS numero FROM ventas WHERE tipo = 'factura' AND sucursal_id = $1`, [sucursalId]),
+  ]);
+  const emisorCompleto = !!(negocio && negocio.nombre_negocio && negocio.ruc && negocio.actividad_economica);
+  const timbradoVigente = !!(fiscal && /^\d{8}$/.test(fiscal.timbrado) && fiscal.timbrado_vigencia &&
+    fiscal.timbrado_vigencia >= hoy() && /^\d{3}$/.test(fiscal.establecimiento) &&
+    /^\d{3}$/.test(fiscal.punto_expedicion));
+  const ultimoNumero = Number(ultimo && ultimo.numero ? ultimo.numero : 0);
+  const rangoDisponible = !!(fiscal && timbradoVigente && ultimoNumero < Number(fiscal.numero_hasta || 0));
+  res.json({ emisorCompleto, timbradoVigente, rangoDisponible, sucursal_id: sucursalId });
+}));
+
 app.get('/api/config/fiscal', requireDueño, h(async (req, res) => {
   const sucursalId = entero(req.query.sucursal_id, 1, 1);
   const sucursal = await db.get(`SELECT id, nombre FROM sucursales WHERE id = $1`, [sucursalId]);

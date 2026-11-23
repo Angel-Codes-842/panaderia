@@ -742,11 +742,14 @@ async function cargarDashboard() {
 
 // ── POS ───────────────────────────────────────────────────
 let posClienteSel = null;
+let posTipoComprobante = 'ticket';
+let posFiscalEstado = null;
 let posRecibidoManual = false; // El operador editó el importe (billete de mayor denominación)
 
 async function cargarPos() {
   posRecibidoManual = false;
   [productosGlobal, clientesGlobal, configGlobal] = await Promise.all([api('/api/productos'), api('/api/clientes'), obtenerConfig()]);
+  posFiscalEstado = await api(withSucOperativa('/api/config/fiscal/estado')).catch(() => null);
   cargarCarritoGuardado();
   const fpago = $('#pos-forma-pago');
   if (fpago) {
@@ -808,11 +811,20 @@ async function cargarPos() {
     };
   }
   const tipo = $('#pos-tipo-comprobante');
-  if (tipo) tipo.value = 'ticket';
-  posClienteSel = null;
-  // No vaciar el carrito al recargar el POS para mantenerlo entre pestañas.
+  if (tipo) {
+    tipo.value = posTipoComprobante;
+    tipo.onchange = () => {
+      posTipoComprobante = tipo.value === 'factura' ? 'factura' : 'ticket';
+      actualizarComprobantePOS();
+      actualizarBotonCobrar();
+      if (posTipoComprobante === 'factura' && !posClienteSel) abrirSelectorClientePOS();
+    };
+  }
+  // No vaciar el carrito ni el cliente al recargar el POS entre pestañas.
   pintarCarrito();
   actualizarClientePOS();
+  actualizarComprobantePOS();
+  actualizarBotonCobrar();
   calcularVuelto();
   calcularTotalBoutique();
   cargarComprobantes();
@@ -1234,7 +1246,10 @@ function nuevaVentaPOS() {
     if (input) input.value = '';
   });
   const tipo = $('#pos-tipo-comprobante');
+  posTipoComprobante = 'ticket';
   if (tipo) tipo.value = 'ticket';
+  actualizarComprobantePOS();
+  actualizarBotonCobrar();
   const desc = $('#pos-descuento');
   if (desc) desc.value = 0;
   calcularVuelto();
@@ -1387,6 +1402,61 @@ function actualizarClientePOS() {
     else { nom.textContent = posClienteSel.nombre || posClienteSel.name || 'Cliente'; if (doc) doc.textContent = posClienteSel.documento || posClienteSel.document || posClienteSel.telefono || posClienteSel.phone || 'Sin documento'; }
   }
   if (nomTop) nomTop.textContent = posClienteSel ? (posClienteSel.nombre || posClienteSel.name || 'Cliente') : 'Sin cliente';
+  actualizarComprobantePOS();
+}
+
+function textoBotonCobrar() {
+  const tipo = $('#pos-tipo-comprobante')?.value === 'factura' ? 'Factura' : 'Ticket';
+  return `<i data-lucide="check-circle"></i> Cobrar ${tipo} <kbd class="pos-kbd">F9</kbd>`;
+}
+
+function actualizarBotonCobrar() {
+  const btn = $('#btn-vender');
+  if (btn && !btn.disabled) { btn.innerHTML = textoBotonCobrar(); reicons(); }
+}
+
+function validarComprobantePOS(tipo) {
+  if (tipo !== 'factura') return null;
+  if (!posClienteSel) return 'Para emitir factura debe seleccionar un cliente';
+  if (!(posClienteSel.nombre || posClienteSel.name) || !posClienteSel.documento) {
+    return 'El cliente debe tener nombre y documento para emitir la factura';
+  }
+  const estado = posFiscalEstado || {};
+  if (estado.emisorCompleto === false) return 'Completá nombre, RUC y actividad económica del emisor en Configuración';
+  if (estado.timbradoVigente === false) return 'Configurá un timbrado vigente y los datos de establecimiento para esta sucursal';
+  if (estado.rangoDisponible === false) return 'Se agotó el rango de numeración autorizado. Configurá el siguiente timbrado';
+  return null;
+}
+
+function actualizarComprobantePOS() {
+  const aviso = $('#pos-comprobante-aviso');
+  if (!aviso) return;
+  const esFactura = posTipoComprobante === 'factura';
+  let clase = 'ok', icono = 'receipt';
+  let texto = 'Ticket interno · se emite a Consumidor Final';
+  let accion = '';
+  if (esFactura) {
+    if (!posClienteSel) {
+      clase = 'warn'; icono = 'alert-triangle';
+      texto = 'Factura: elegí un cliente con nombre y documento.';
+      accion = '<button class="btn small ghost" onclick="abrirSelectorClientePOS()"><i data-lucide="user"></i> Elegir cliente</button>';
+    } else {
+      const error = validarComprobantePOS('factura');
+      const nombre = escapeHtml(posClienteSel.nombre || posClienteSel.name || 'Cliente');
+      const doc = posClienteSel.documento ? ' · ' + escapeHtml(posClienteSel.documento) : '';
+      if (error) {
+        clase = 'warn'; icono = 'alert-triangle';
+        texto = `Factura para ${nombre}${doc}: ${error}`;
+        accion = '<button class="btn small ghost" onclick="irATab(\'config\')"><i data-lucide="settings"></i> Configuración</button>';
+      } else {
+        icono = 'badge-check';
+        texto = `Factura lista para ${nombre}${doc}`;
+      }
+    }
+  }
+  aviso.className = `pos-comprobante-aviso ${clase}`;
+  aviso.innerHTML = `<i data-lucide="${icono}"></i><span style="flex:1">${texto}</span>${accion}`;
+  reicons();
 }
 
 function abrirSelectorClientePOS() {
@@ -2149,9 +2219,10 @@ async function eliminarProducto(id) {
 $('#btn-vender').addEventListener('click', () => {
   if (!carrito.size) return toast('No hay productos en el carrito', 'warn');
   const fp = $('#pos-forma-pago')?.value || 'efectivo';
-  const tipo = $('#pos-tipo-comprobante')?.value || 'ticket';
+  const tipo = posTipoComprobante;
   const { total } = calcularTotalNumerico();
-  if (tipo === 'factura' && !posClienteSel) return toast('Para emitir factura debe seleccionar un cliente', 'warn');
+  const errorComprobante = validarComprobantePOS(tipo);
+  if (errorComprobante) return toast(errorComprobante, 'warn');
   if (fp === 'credito' && !posClienteSel) return toast('Debe seleccionar un cliente para venta a crédito', 'warn');
   if (fp === 'efectivo') {
     const recibido = Number($('#pos-recibido')?.value || 0);
@@ -2187,7 +2258,8 @@ function calcularTotalNumerico() {
 async function cobrarBoutique(tipo, fp, pagos) {
   const { subtotal, descuento, total } = calcularTotalNumerico();
   if (!carrito.size) return toast('No hay productos en el carrito', 'warn');
-  if (tipo === 'factura' && !posClienteSel) return toast('Para emitir factura debe seleccionar un cliente', 'warn');
+  const errorComprobante = validarComprobantePOS(tipo);
+  if (errorComprobante) return toast(errorComprobante, 'warn');
   if (fp === 'credito' && !posClienteSel) return toast('Debe seleccionar un cliente para venta a crédito', 'warn');
   if (fp === 'efectivo') {
     const recibido = Number($('#pos-recibido')?.value || 0);
@@ -2223,6 +2295,10 @@ async function cobrarBoutique(tipo, fp, pagos) {
     });
     const desc = $('#pos-descuento');
     if (desc) desc.value = 0;
+    posTipoComprobante = 'ticket';
+    const tipoSel = $('#pos-tipo-comprobante');
+    if (tipoSel) tipoSel.value = 'ticket';
+    actualizarComprobantePOS();
     pintarCarrito();
     cargarComprobantes();
     cargarCaja();
@@ -2233,7 +2309,7 @@ async function cobrarBoutique(tipo, fp, pagos) {
   } catch (e) {
     toast(e.message, 'err');
   } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="check-circle"></i> Cobrar'; reicons(); }
+    if (btn) { btn.disabled = false; btn.innerHTML = textoBotonCobrar(); reicons(); }
   }
 }
 
@@ -2280,6 +2356,10 @@ async function confirmarVentaBoutique(total, formaPago, tipo, clienteId) {
     posRecibidoManual = false;
     const descEl = $('#pos-descuento');
     if (descEl) descEl.value = 0;
+    posTipoComprobante = 'ticket';
+    const tipoSel = $('#pos-tipo-comprobante');
+    if (tipoSel) tipoSel.value = 'ticket';
+    actualizarComprobantePOS();
     pintarCarrito();
     cargarComprobantes();
     cargarCaja();
@@ -2288,7 +2368,7 @@ async function confirmarVentaBoutique(total, formaPago, tipo, clienteId) {
     toast('Venta registrada correctamente', 'ok');
   } catch (e) {
     toast(e.message, 'err');
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i data-lucide="check-circle"></i> Cobrar'; reicons(); }
+    if (btn) { btn.disabled = false; btn.innerHTML = textoBotonCobrar(); reicons(); }
   }
 }
 

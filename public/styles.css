@@ -845,6 +845,25 @@ input.buscar:focus { background: #fffdf6; }
 .pos-header-row .btn { min-height: 38px; }
 .pos-header-row .pos-quick-search { flex: 1 1 350px; width: auto; min-width: min(100%, 280px); }
 .pos-header-row .pos-select { width: auto; min-width: 118px; margin: 0; }
+.pos-comprobante-aviso {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border: 1px solid var(--borde);
+  border-radius: var(--radius-sm);
+  background: var(--papel);
+  color: var(--texto);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.pos-comprobante-aviso svg { width: 15px; height: 15px; flex-shrink: 0; }
+.pos-comprobante-aviso.ok { border-color: color-mix(in srgb, var(--verde) 35%, var(--borde)); background: color-mix(in srgb, var(--verde) 7%, var(--papel)); }
+.pos-comprobante-aviso.ok svg { color: var(--verde); }
+.pos-comprobante-aviso.warn { border-color: color-mix(in srgb, var(--ambar) 45%, var(--borde)); background: var(--ambar-bg); }
+.pos-comprobante-aviso.warn svg { color: var(--ambar); }
 .pos-new-sale { justify-content: center; }
 .pos-entry-row { margin-bottom: 14px; }
 .pos-search-wrap {
