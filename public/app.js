@@ -4102,10 +4102,10 @@ function pintarConfigIva() {
     productosConfigIva.map((p) => `<tr>
       <td><b>${escapeHtml(p.nombre)}</b></td><td>${escapeHtml(p.categoria)}</td>
       <td><select id="iva-producto-${p.id}" class="pos-select" aria-label="IVA de ${escapeAttr(p.nombre)}">
-        <option value="" ${p.iva_tasa == null ? 'selected' : ''}>Sin configurar</option>
+        <option value="">Sin configurar</option>
         <option value="0" ${Number(p.iva_tasa) === 0 ? 'selected' : ''}>Exenta</option>
         <option value="5" ${Number(p.iva_tasa) === 5 ? 'selected' : ''}>5%</option>
-        <option value="10" ${Number(p.iva_tasa) === 10 ? 'selected' : ''}>10%</option>
+        <option value="10" ${p.iva_tasa == null || Number(p.iva_tasa) === 10 ? 'selected' : ''}>10%</option>
       </select></td>
     </tr>`).join('')
   }</tbody>`;

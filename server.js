@@ -837,10 +837,13 @@ app.post('/api/productos', h(async (req, res) => {
   const precio = num(req.body.precio_venta, 0, 1e12, 0);
   const stock = num(req.body.stock, 0, 1e9, 0);
   const codigo = normalizarCodigo(req.body.codigo);
+  // IVA 10% por defecto; si llega una tasa explícita válida, se respeta.
+  const ivaTasa = [0, 5, 10].includes(Number(req.body.iva_tasa)) ? Number(req.body.iva_tasa) : 10;
   try {
     const info = await db.get(
-      `INSERT INTO productos (nombre, categoria, unidad, precio_venta, stock, codigo) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-      [nombre, str(req.body.categoria, 50) || 'Otros', unidad, precio, stock, codigo]);
+      `INSERT INTO productos (nombre, categoria, unidad, precio_venta, stock, codigo, iva_tasa)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [nombre, str(req.body.categoria, 50) || 'Otros', unidad, precio, stock, codigo, ivaTasa]);
     res.json({ id: info.id, codigo: codigo || null });
   } catch (e) {
     if (responderCodigoDuplicado(e, res)) return;

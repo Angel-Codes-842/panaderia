@@ -181,7 +181,9 @@ CREATE TABLE IF NOT EXISTS configuracion_fiscal (
   numero_desde INT NOT NULL DEFAULT 1,
   numero_hasta INT NOT NULL DEFAULT 9999999
 );
-ALTER TABLE productos ADD COLUMN IF NOT EXISTS iva_tasa SMALLINT;
+-- Todo producto nace con IVA 10% (precios de venta con IVA incluido).
+ALTER TABLE productos ADD COLUMN IF NOT EXISTS iva_tasa SMALLINT DEFAULT 10;
+ALTER TABLE productos ALTER COLUMN iva_tasa SET DEFAULT 10;
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'productos_iva_tasa_check') THEN
     ALTER TABLE productos ADD CONSTRAINT productos_iva_tasa_check
@@ -417,6 +419,17 @@ async function migrar() {
   await db.run(`INSERT INTO sucursales (id, nombre, direccion) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [1, 'Principal', '']);
   await db.run(`INSERT INTO configuracion (id) VALUES (1) ON CONFLICT DO NOTHING`, []);
   await db.run(`INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [9, new Date().toISOString()]);
+
+  // Los productos creados antes de la tasa por defecto quedaban sin IVA y
+  // bloqueaban la emisión de facturas. Se completan una sola vez con 10%.
+  const ivaMigrado = await db.get(`SELECT version FROM schema_migrations WHERE version = 10`);
+  if (!ivaMigrado) {
+    await db.transakt(async (t) => {
+      await t.run(`UPDATE productos SET iva_tasa = 10 WHERE iva_tasa IS NULL`);
+      await t.run(`INSERT INTO schema_migrations (version, applied_at) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [10, new Date().toISOString()]);
+    });
+  }
   // "Principal" se inserta con id explícito 1; la secuencia BIGSERIAL quedó en 1 y
   // el primer INSERT sin id (crear sucursal) chocaría contra la PK. La sincronizo.
   await db.run(`SELECT setval(pg_get_serial_sequence('sucursales', 'id'), COALESCE((SELECT MAX(id) FROM sucursales), 1))`);
